@@ -73,7 +73,8 @@ public class MeetingRoomController {
 
     @FXML
     private void initialize() {
-        sidePanelController = new SidePanelController(sidePanel, chatPanelRoot, participantsPanelRoot, fileSharingPanelRoot);
+        sidePanelController = new SidePanelController(sidePanel, chatPanelRoot, participantsPanelRoot,
+                fileSharingPanelRoot);
 
         // Load chat UI programmatically and keep a reference to its controller
         try {
@@ -105,6 +106,9 @@ public class MeetingRoomController {
         p2pHandler.initialize();
         if (videoGridController != null) {
             p2pHandler.setVideoGridController(videoGridController);
+        }
+        if (meetingControlsController != null) {
+            p2pHandler.setMeetingControlsController(meetingControlsController);
         }
         p2pHandler.setOnParticipantChanged(this::updateParticipantsUI);
         p2pHandler.setOnLeaveMeeting(this::handleLeaveMeeting);
@@ -153,7 +157,8 @@ public class MeetingRoomController {
                 controlsListenersAttached = true;
 
                 meetingControlsController.audioOnProperty().addListener((o, oldV, newV) -> {
-                    if (suppressControlEvents) return;
+                    if (suppressControlEvents)
+                        return;
                     updateCurrentUserAudio(newV);
                     if (p2pHandler != null) {
                         p2pHandler.broadcastAudioToggle(newV);
@@ -165,7 +170,8 @@ public class MeetingRoomController {
                 });
 
                 meetingControlsController.videoOnProperty().addListener((o, oldV, newV) -> {
-                    if (suppressControlEvents) return;
+                    if (suppressControlEvents)
+                        return;
                     updateCurrentUserVideo(newV);
                     if (p2pHandler != null) {
                         p2pHandler.broadcastVideoToggle(newV);
@@ -177,7 +183,8 @@ public class MeetingRoomController {
                 });
 
                 meetingControlsController.screenSharingProperty().addListener((o, oldV, newV) -> {
-                    if (suppressControlEvents) return;
+                    if (suppressControlEvents)
+                        return;
                     updateCurrentUserScreenSharing(newV);
                 });
 
@@ -254,13 +261,17 @@ public class MeetingRoomController {
             return;
 
         List<Participant> mockParticipants = new ArrayList<>();
-//        mockParticipants.add(new Participant(currentUserId, currentUserName, currentUserAvatar, true, true, false, false));
-//        mockParticipants.add(new Participant("2", "Trần Thị B", "https://api.dicebear.com/7.x/avataaars/svg?seed=user2",
-//                true, true, false, false));
-//        mockParticipants.add(new Participant("3", "Lê Văn C", "https://api.dicebear.com/7.x/avataaars/svg?seed=user3",
-//                false, true, false, false));
-//        mockParticipants.add(new Participant("4", "Phạm Thị D", "https://api.dicebear.com/7.x/avataaars/svg?seed=user4",
-//                true, false, false, false));
+        // mockParticipants.add(new Participant(currentUserId, currentUserName,
+        // currentUserAvatar, true, true, false, false));
+        // mockParticipants.add(new Participant("2", "Trần Thị B",
+        // "https://api.dicebear.com/7.x/avataaars/svg?seed=user2",
+        // true, true, false, false));
+        // mockParticipants.add(new Participant("3", "Lê Văn C",
+        // "https://api.dicebear.com/7.x/avataaars/svg?seed=user3",
+        // false, true, false, false));
+        // mockParticipants.add(new Participant("4", "Phạm Thị D",
+        // "https://api.dicebear.com/7.x/avataaars/svg?seed=user4",
+        // true, false, false, false));
 
         if (participantsManager != null) {
             participantsManager.setParticipants(mockParticipants);
@@ -323,6 +334,13 @@ public class MeetingRoomController {
     private void updateCurrentUserScreenSharing(boolean isOn) {
         if (participantsManager != null) {
             participantsManager.updateCurrentUserScreenSharing(isOn);
+        }
+        if (p2pHandler != null) {
+            if (isOn) {
+                p2pHandler.startScreenShare();
+            } else {
+                p2pHandler.stopScreenShare();
+            }
         }
     }
 

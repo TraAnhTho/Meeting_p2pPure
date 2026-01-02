@@ -39,10 +39,10 @@
 
     <!-- MAIN CONTENT -->
     <center>
-        <HBox fx:id="mainContent"
-              HBox.hgrow="ALWAYS"
-              VBox.vgrow="ALWAYS"
-              styleClass="meeting-main">
+        <StackPane fx:id="mainContent"
+                   HBox.hgrow="ALWAYS"
+                   VBox.vgrow="ALWAYS"
+                   styleClass="meeting-main">
 
             <!-- VIDEO GRID -->
             <StackPane fx:id="videoGridWrapper"
@@ -55,14 +55,15 @@
 
             </StackPane>
 
-            <!-- SIDE PANEL -->
+            <!-- SIDE PANEL - Overlay on top, positioned to right side -->
             <VBox fx:id="sidePanel"
                   visible="false"
                   managed="false"
                   prefWidth="320"
                   maxWidth="320"
                   VBox.vgrow="ALWAYS"
-                  styleClass="side-panel">
+                  styleClass="side-panel"
+                  StackPane.alignment="CENTER_RIGHT">
 
                 <StackPane fx:id="chatPanelRoot" VBox.vgrow="ALWAYS"
                            visible="false" managed="false"/>
@@ -78,7 +79,7 @@
                 </StackPane>
 
             </VBox>
-        </HBox>
+        </StackPane>
     </center>
 
     <!-- FOOTER -->

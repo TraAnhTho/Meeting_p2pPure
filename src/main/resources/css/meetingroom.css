@@ -55,7 +55,8 @@
     -fx-background-color: #0f172a;
     -fx-padding: 16;
     -fx-pref-height: 100%;
-
+    /* Overlay on top of video grid, positioned to right */
+    -fx-effect: dropshadow(three-pass-box, rgba(0, 0, 0, 0.5), 10, 0, 0, 0);
 }
 
 .video-grid-root {
@@ -117,7 +118,9 @@
 }
 
 /* audio / video / screen */
-.audio-button, .video-button, .screen-share-button {
+.audio-button,
+.video-button,
+.screen-share-button {
     -fx-background-color: #10b981;
     -fx-text-fill: white;
     -fx-background-radius: 8;

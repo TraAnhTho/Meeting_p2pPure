@@ -6,6 +6,7 @@ import com.example.dacs4.network.VoiceEngine;
 import com.example.dacs4.network.FileTransferManager;
 import com.example.dacs4.network.P2PManager;
 import com.example.dacs4.network.WebcamVideoSource;
+import com.example.dacs4.network.ScreenShareSource;
 import javafx.scene.image.Image;
 import javafx.application.Platform;
 import javafx.embed.swing.SwingFXUtils;
@@ -25,15 +26,21 @@ public class MeetingRoomP2PHandler {
     private static final int BASE_PORT = 5000;
     private static final int VOICE_BASE_PORT = 6000;
     private static final int VIDEO_BASE_PORT = 7000;
+    private static final int SCREEN_BASE_PORT = 8000;
 
     private P2PManager p2pManager;
     private VoiceEngine voiceEngine;
-    private VideoEngine videoEngine;
+    private VideoEngine videoEngine; // camera
+    private VideoEngine screenEngine; // screen share
     private WebcamVideoSource webcamSource;
+    private ScreenShareSource screenSource;
     private FileTransferManager fileTransferManager;
     private VideoGridController videoGridController;
     private boolean isAudioStreaming = false;
     private boolean isVideoStreaming = false;
+    private boolean isScreenSharing = false;
+    private volatile String currentScreenSharerId = null; // who is currently sharing
+    private ScreenFrameBroadcaster screenBroadcaster;
 
     private boolean connected = false;
     private boolean autoAudioStarted = false;
@@ -48,6 +55,8 @@ public class MeetingRoomP2PHandler {
     private java.util.function.BiConsumer<String, Image> onRemoteVideoFrame;
     private ChatController chatController;
     private FileSharingController fileSharingController;
+    private MeetingControlsController meetingControlsController;
+    private boolean suppressControlEvents = false;
 
     public void setVideoGridController(VideoGridController controller) {
         this.videoGridController = controller;
@@ -67,8 +76,7 @@ public class MeetingRoomP2PHandler {
                                 fileName,
                                 LocalDateTime.now(),
                                 ChatMessage.Type.FILE,
-                                fileName
-                        );
+                                fileName);
                         fileSharingController.addFileMessage(fileMsg);
                     });
                 }
@@ -177,7 +185,8 @@ public class MeetingRoomP2PHandler {
                 connected = true;
             }
 
-            // Always start the UDP receiver so we can display remote video even if local camera is off
+            // Always start the UDP receiver so we can display remote video even if local
+            // camera is off
             int myVideoPort = VIDEO_BASE_PORT + Math.abs(userId.hashCode() % 1000);
             if (videoEngine == null) {
                 videoEngine = new VideoEngine(myVideoPort);
@@ -214,6 +223,53 @@ public class MeetingRoomP2PHandler {
                 System.err.println("❌ Error starting video receiver: " + e.getMessage());
             }
 
+            // Start screen share receiver (always listening)
+            int myScreenPort = SCREEN_BASE_PORT + Math.abs(userId.hashCode() % 1000);
+            if (screenEngine == null) {
+                screenEngine = new VideoEngine(myScreenPort);
+                System.out.println("🖥 ScreenEngine initialized on port " + myScreenPort);
+            }
+            try {
+                screenEngine.startReceiver();
+                screenEngine.setFrameListener((data, from, fromPort) -> {
+                    String remoteId = resolvePeerIdByScreenPort(fromPort);
+                    if (remoteId == null) {
+                        // Try to resolve by checking all peers by IP
+                        System.out.println("⚠️ Could not resolve peer by screen port: " + fromPort);
+                        for (PeerInfo peer : p2pManager.getPeers().values()) {
+                            if (peer != null && peer.getIpAddress() != null) {
+                                try {
+                                    if (java.net.InetAddress.getByName(peer.getIpAddress()).equals(from)) {
+                                        remoteId = peer.getUserId();
+                                        break;
+                                    }
+                                } catch (Exception ignored) {
+                                }
+                            }
+                        }
+                        if (remoteId == null) {
+                            return;
+                        }
+                    }
+                    // Decode JPEG bytes to JavaFX Image
+                    Image fxImg = decodeJpegToFxImage(data);
+                    if (fxImg != null && videoGridController != null) {
+                        // Create final variable for lambda
+                        final String finalRemoteId = remoteId;
+                        final Image finalFxImg = fxImg;
+                        Platform.runLater(() -> {
+                            videoGridController.showScreen(finalRemoteId, finalFxImg);
+                            currentScreenSharerId = finalRemoteId;
+                        });
+                    } else {
+                        System.err.println("❌ Failed to decode screen frame from " + remoteId);
+                    }
+                });
+                System.out.println("✅ Screen receiver started on port " + myScreenPort);
+            } catch (Exception e) {
+                System.err.println("❌ Error starting screen receiver: " + e.getMessage());
+            }
+
             // Auto-start mic after P2P is ready (default mic ON in UI)
             if (connected && !autoAudioStarted) {
                 autoAudioStarted = true;
@@ -228,13 +284,41 @@ public class MeetingRoomP2PHandler {
     }
 
     private String resolvePeerIdByVideoPort(int fromPort) {
-        if (p2pManager == null) return null;
+        if (p2pManager == null)
+            return null;
         for (PeerInfo peer : p2pManager.getPeers().values()) {
-            if (peer == null || peer.getUserId() == null) continue;
+            if (peer == null || peer.getUserId() == null)
+                continue;
             int expected = VIDEO_BASE_PORT + Math.abs(peer.getUserId().hashCode() % 1000);
             if (expected == fromPort) {
                 return peer.getUserId();
             }
+        }
+        return null;
+    }
+
+    private String resolvePeerIdByScreenPort(int fromPort) {
+        if (p2pManager == null)
+            return null;
+        for (PeerInfo peer : p2pManager.getPeers().values()) {
+            if (peer == null || peer.getUserId() == null)
+                continue;
+            int expected = SCREEN_BASE_PORT + Math.abs(peer.getUserId().hashCode() % 1000);
+            if (expected == fromPort) {
+                return peer.getUserId();
+            }
+        }
+        return null;
+    }
+
+    private static Image decodeJpegToFxImage(byte[] jpegBytes) {
+        try (ByteArrayInputStream bais = new ByteArrayInputStream(jpegBytes)) {
+            BufferedImage bimg = ImageIO.read(bais);
+            if (bimg != null) {
+                return SwingFXUtils.toFXImage(bimg, null);
+            }
+        } catch (IOException e) {
+            System.err.println("❌ Error decoding JPEG: " + e.getMessage());
         }
         return null;
     }
@@ -257,8 +341,12 @@ public class MeetingRoomP2PHandler {
         System.out.println("🛑 Stopping P2P Handler...");
         stopAudioStreaming();
         stopVideoStreaming();
+        stopScreenShare();
         if (videoEngine != null) {
             videoEngine.stop();
+        }
+        if (screenEngine != null) {
+            screenEngine.stop();
         }
         if (p2pManager != null) {
             p2pManager.stop();
@@ -266,12 +354,15 @@ public class MeetingRoomP2PHandler {
         }
         voiceEngine = null;
         videoEngine = null;
+        screenEngine = null;
         meetingId = null;
         currentUserId = null;
         currentUserName = null;
         userRole = null;
         isAudioStreaming = false;
         isVideoStreaming = false;
+        isScreenSharing = false;
+        currentScreenSharerId = null;
         connected = false;
         autoAudioStarted = false;
     }
@@ -318,6 +409,12 @@ public class MeetingRoomP2PHandler {
             case AUDIO_TOGGLE:
                 handleAudioToggle(message);
                 break;
+            case SCREEN_SHARE_START:
+                handleScreenShareStart(message);
+                break;
+            case SCREEN_SHARE_STOP:
+                handleScreenShareStop(message);
+                break;
             default:
                 System.out.println("⚠️ Unhandled message type: " + message.getType());
         }
@@ -346,14 +443,16 @@ public class MeetingRoomP2PHandler {
     }
 
     public void broadcastVideoToggle(boolean isOn) {
-        if (p2pManager == null || currentUserId == null) return;
+        if (p2pManager == null || currentUserId == null)
+            return;
         P2PMessage msg = new P2PMessage(MessageType.VIDEO_TOGGLE, currentUserId, "all");
         msg.addPayload("isOn", String.valueOf(isOn));
         broadcastMessage(msg);
     }
 
     public void broadcastAudioToggle(boolean isOn) {
-        if (p2pManager == null || currentUserId == null) return;
+        if (p2pManager == null || currentUserId == null)
+            return;
         P2PMessage msg = new P2PMessage(MessageType.AUDIO_TOGGLE, currentUserId, "all");
         msg.addPayload("isOn", String.valueOf(isOn));
         broadcastMessage(msg);
@@ -368,8 +467,7 @@ public class MeetingRoomP2PHandler {
                     message.getFrom(),
                     senderName,
                     content,
-                    LocalDateTime.now()
-            );
+                    LocalDateTime.now());
 
             Platform.runLater(() -> chatController.addMessage(chatMessage));
         }
@@ -428,13 +526,16 @@ public class MeetingRoomP2PHandler {
     }
 
     private void syncAudioTargets() {
-        if (voiceEngine == null || p2pManager == null) return;
+        if (voiceEngine == null || p2pManager == null)
+            return;
 
         voiceEngine.clearRemoteTargets();
         for (PeerInfo peer : p2pManager.getPeers().values()) {
-            if (peer == null || peer.getUserId() == null) continue;
+            if (peer == null || peer.getUserId() == null)
+                continue;
             String ip = peer.getIpAddress();
-            if (ip == null || ip.isBlank()) continue;
+            if (ip == null || ip.isBlank())
+                continue;
 
             int peerVoicePort = VOICE_BASE_PORT + Math.abs(peer.getUserId().hashCode() % 1000);
             voiceEngine.addRemoteTarget(peer.getUserId(), ip, peerVoicePort);
@@ -473,7 +574,8 @@ public class MeetingRoomP2PHandler {
 
                 if (webcamSource.isAvailable()) {
                     webcamSource.setLocalFrameCallback(fxImage -> {
-                        if (fxImage == null) return;
+                        if (fxImage == null)
+                            return;
                         if (onRemoteVideoFrame != null && currentUserId != null) {
                             Platform.runLater(() -> onRemoteVideoFrame.accept(currentUserId, fxImage));
                         }
@@ -572,6 +674,10 @@ public class MeetingRoomP2PHandler {
         this.fileSharingController = fileSharingController;
     }
 
+    public void setMeetingControlsController(MeetingControlsController controller) {
+        this.meetingControlsController = controller;
+    }
+
     public void setOnParticipantChanged(Runnable callback) {
         this.onParticipantChanged = callback;
     }
@@ -595,9 +701,262 @@ public class MeetingRoomP2PHandler {
                 fileName,
                 LocalDateTime.now(),
                 ChatMessage.Type.FILE,
-                fileName
-        );
+                fileName);
 
         fileSharingController.addFileMessage(fileMsg);
+    }
+
+    // ===== SCREEN SHARING =====
+
+    public void startScreenShare() {
+        if (isScreenSharing || p2pManager == null || currentUserId == null) {
+            return;
+        }
+
+        // Kiểm tra nếu đã có người khác đang share
+        if (currentScreenSharerId != null && !currentScreenSharerId.equals(currentUserId)) {
+            Platform.runLater(() -> {
+                javafx.scene.control.Alert alert = new javafx.scene.control.Alert(
+                        javafx.scene.control.Alert.AlertType.WARNING);
+                alert.setTitle("Không thể chia sẻ màn hình");
+                alert.setHeaderText("Đã có người đang chia sẻ màn hình");
+                alert.setContentText("Vui lòng đợi người khác dừng chia sẻ trước khi bạn bắt đầu.");
+                alert.showAndWait();
+            });
+            // Reset toggle button
+            if (meetingControlsController != null) {
+                Platform.runLater(() -> {
+                    suppressControlEvents = true;
+                    meetingControlsController.screenSharingProperty().set(false);
+                    suppressControlEvents = false;
+                });
+            }
+            return;
+        }
+
+        try {
+            // Ensure screen engine is initialized
+            if (screenEngine == null) {
+                int myScreenPort = SCREEN_BASE_PORT + Math.abs(currentUserId.hashCode() % 1000);
+                screenEngine = new VideoEngine(myScreenPort);
+                System.out.println("🖥 ScreenEngine initialized on port " + myScreenPort);
+            }
+
+            // Create broadcaster for screen frames
+            // Note: broadcaster doesn't need to bind to specific port, receiver does
+            if (screenBroadcaster == null) {
+                screenBroadcaster = new ScreenFrameBroadcaster(p2pManager, 0); // 0 = let system assign port
+                if (!screenBroadcaster.isReady()) {
+                    System.err.println("❌ Failed to create screen broadcaster, cannot start screen share");
+                    screenBroadcaster = null;
+                    return;
+                }
+            }
+
+            // Start screen capture
+            if (screenSource == null) {
+                screenSource = new ScreenShareSource(800, 450, 10, 0.6f);
+                // Optional: local preview
+                screenSource.setLocalPreviewCallback(img -> {
+                    if (videoGridController != null) {
+                        Platform.runLater(() -> videoGridController.showScreen(currentUserId, img));
+                    }
+                });
+                // Set frame callback to broadcast to all peers
+                screenSource.setFrameCallback(jpegBytes -> {
+                    if (screenBroadcaster != null) {
+                        screenBroadcaster.sendFrame(jpegBytes);
+                    }
+                });
+            }
+
+            // Broadcast screen share start
+            broadcastScreenShareStart();
+
+            // Start capture
+            screenSource.start();
+
+            isScreenSharing = true;
+            currentScreenSharerId = currentUserId;
+
+            System.out.println("🖥 Screen sharing started");
+        } catch (Exception e) {
+            System.err.println("❌ startScreenShare failed: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    public void stopScreenShare() {
+        if (!isScreenSharing) {
+            return;
+        }
+
+        try {
+            if (screenSource != null) {
+                screenSource.stop();
+            }
+            if (screenBroadcaster != null) {
+                screenBroadcaster.close();
+                screenBroadcaster = null;
+            }
+            broadcastScreenShareStop();
+
+            isScreenSharing = false;
+            if (currentScreenSharerId != null && currentScreenSharerId.equals(currentUserId)) {
+                currentScreenSharerId = null;
+                if (videoGridController != null) {
+                    Platform.runLater(() -> videoGridController.hideScreen());
+                }
+            }
+
+            System.out.println("🛑 Screen sharing stopped");
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void broadcastScreenShareStart() {
+        if (p2pManager == null || currentUserId == null)
+            return;
+        P2PMessage msg = new P2PMessage(MessageType.SCREEN_SHARE_START, currentUserId, "all");
+        msg.addPayload("screenPort", String.valueOf(SCREEN_BASE_PORT + Math.abs(currentUserId.hashCode() % 1000)));
+        broadcastMessage(msg);
+    }
+
+    private void broadcastScreenShareStop() {
+        if (p2pManager == null || currentUserId == null)
+            return;
+        P2PMessage msg = new P2PMessage(MessageType.SCREEN_SHARE_STOP, currentUserId, "all");
+        broadcastMessage(msg);
+    }
+
+    private void handleScreenShareStart(P2PMessage message) {
+        String sharerId = message.getFrom();
+        System.out.println("🖥 Screen share started by: " + sharerId);
+
+        // Nếu đã có người share và không phải mình, cập nhật state
+        if (currentScreenSharerId != null && !currentScreenSharerId.equals(sharerId)) {
+            System.out.println("⚠️ Someone else is already sharing, ignoring");
+            return;
+        }
+
+        currentScreenSharerId = sharerId;
+
+        // Nếu mình đang share nhưng có người khác cũng share, dừng mình lại
+        if (isScreenSharing && !sharerId.equals(currentUserId)) {
+            Platform.runLater(() -> {
+                javafx.scene.control.Alert alert = new javafx.scene.control.Alert(
+                        javafx.scene.control.Alert.AlertType.INFORMATION);
+                alert.setTitle("Chia sẻ màn hình đã dừng");
+                alert.setHeaderText("Người khác đã bắt đầu chia sẻ màn hình");
+                alert.setContentText("Chia sẻ màn hình của bạn đã được dừng.");
+                alert.showAndWait();
+            });
+            stopScreenShare();
+            if (meetingControlsController != null) {
+                Platform.runLater(() -> {
+                    suppressControlEvents = true;
+                    meetingControlsController.screenSharingProperty().set(false);
+                    suppressControlEvents = false;
+                });
+            }
+        }
+
+        if (onParticipantChanged != null) {
+            onParticipantChanged.run();
+        }
+    }
+
+    private void handleScreenShareStop(P2PMessage message) {
+        String sharerId = message.getFrom();
+        System.out.println("🛑 Screen share stopped by: " + sharerId);
+        if (sharerId != null && sharerId.equals(currentScreenSharerId)) {
+            currentScreenSharerId = null;
+            if (videoGridController != null) {
+                Platform.runLater(() -> videoGridController.hideScreen());
+            }
+        }
+        if (onParticipantChanged != null) {
+            onParticipantChanged.run();
+        }
+    }
+
+    public boolean isScreenSharing() {
+        return isScreenSharing;
+    }
+
+    public String getCurrentScreenSharerId() {
+        return currentScreenSharerId;
+    }
+
+    /**
+     * Helper class to broadcast screen frames to all peers (mesh) using UDP
+     * directly
+     */
+    private class ScreenFrameBroadcaster {
+        private final P2PManager p2pManager;
+        private java.net.DatagramSocket socket;
+
+        public ScreenFrameBroadcaster(P2PManager p2pManager, int unusedPort) {
+            this.p2pManager = p2pManager;
+            try {
+                // Don't bind to specific port for sender - let system assign available port
+                // This avoids conflict with receiver which binds to localPort
+                this.socket = new java.net.DatagramSocket();
+                System.out.println("✅ Screen broadcaster socket created on port " + socket.getLocalPort());
+            } catch (java.net.SocketException e) {
+                System.err.println("❌ Failed to create screen broadcast socket: " + e.getMessage());
+                e.printStackTrace();
+                this.socket = null; // Ensure socket is null on failure
+            }
+        }
+
+        public boolean isReady() {
+            return socket != null && !socket.isClosed();
+        }
+
+        public void sendFrame(byte[] data) {
+            if (p2pManager == null || socket == null || socket.isClosed()) {
+                System.err.println("⚠️ Screen broadcaster not ready");
+                return;
+            }
+
+            var peers = p2pManager.getPeers();
+            if (peers.isEmpty()) {
+                System.out.println("⚠️ No peers to send screen frame to");
+                return;
+            }
+
+            // Broadcast to all peers
+            int sentCount = 0;
+            for (PeerInfo peer : peers.values()) {
+                if (peer == null || peer.getUserId() == null)
+                    continue;
+                String ip = peer.getIpAddress();
+                if (ip == null || ip.isBlank())
+                    continue;
+
+                int peerScreenPort = SCREEN_BASE_PORT + Math.abs(peer.getUserId().hashCode() % 1000);
+                try {
+                    java.net.InetAddress peerAddr = java.net.InetAddress.getByName(ip);
+                    java.net.DatagramPacket packet = new java.net.DatagramPacket(
+                            data, data.length, peerAddr, peerScreenPort);
+                    socket.send(packet);
+                    sentCount++;
+                } catch (Exception e) {
+                    System.err.println("❌ Failed to send screen frame to " + peer.getUserId() + " (" + ip + ":"
+                            + peerScreenPort + "): " + e.getMessage());
+                }
+            }
+            if (sentCount > 0) {
+                System.out.println("📤 Sent screen frame to " + sentCount + " peer(s)");
+            }
+        }
+
+        public void close() {
+            if (socket != null && !socket.isClosed()) {
+                socket.close();
+            }
+        }
     }
 }
