@@ -1,29 +1,37 @@
 package com.example.dacs4.controllers;
 
+import com.example.dacs4.App;
+import com.example.dacs4.DB.SQLiteConnection;
 import javafx.fxml.FXML;
-import javafx.fxml.FXMLLoader;
-import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
-import java.io.File;
 import java.io.IOException;
-import java.net.URL;
-import java.util.UUID;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 
 public class LoginController {
 
-    @FXML private Label titleLabel;
-    @FXML private Label descriptionLabel;
-    @FXML private VBox nameFieldContainer;
-    @FXML private TextField nameField;
-    @FXML private TextField emailField;
-    @FXML private PasswordField passwordField;
-    @FXML private Button submitButton;
-    @FXML private Hyperlink toggleModeLink;
+    @FXML
+    private Label titleLabel;
+    @FXML
+    private Label descriptionLabel;
+    @FXML
+    private VBox nameFieldContainer;
+    @FXML
+    private TextField nameField;
+    @FXML
+    private TextField emailField;
+    @FXML
+    private PasswordField passwordField;
+    @FXML
+    private Button submitButton;
+    @FXML
+    private Hyperlink toggleModeLink;
 
-    private boolean isSignUp = false;
-    // ====== CALLBACK: để App.java bắt sự kiện login ======
+    private boolean isSignUp = false; // Trạng thái đăng ký hay đăng nhập
+
+    // Callback để App.java bắt sự kiện login
     public interface OnLoginListener {
         void onLogin(String id, String name, String email, String avatar);
     }
@@ -34,7 +42,6 @@ public class LoginController {
         this.loginCallback = cb;
     }
 
-
     @FXML
     private void initialize() {
         updateModeUI();
@@ -42,48 +49,96 @@ public class LoginController {
 
     @FXML
     private void onToggleMode() {
-        isSignUp = !isSignUp;
+        isSignUp = !isSignUp; // Chuyển đổi giữa đăng ký và đăng nhập
         updateModeUI();
     }
+
     @FXML
     private void onSubmit() {
         String email = emailField.getText().trim();
         String password = passwordField.getText();
 
+        // Kiểm tra email và password
         if (email.isEmpty() || password.isEmpty()) {
             showAlert("Vui lòng nhập đầy đủ email và mật khẩu.");
             return;
         }
 
-        String name = nameField.getText().trim();
-        if (!isSignUp && name.isEmpty()) {
-            int atIndex = email.indexOf('@');
-            name = atIndex > 0 ? email.substring(0, atIndex) : email;
-        } else if (isSignUp && name.isEmpty()) {
-            showAlert("Vui lòng nhập họ tên.");
+        try (SQLiteConnection db = new SQLiteConnection()) {
+            db.createTables(); // Đảm bảo tables đã được tạo
+
+            if (isSignUp) {
+                // ===== ĐĂNG KÝ =====
+                String name = nameField.getText().trim();
+                if (name.isEmpty()) {
+                    showAlert("Vui lòng nhập họ tên.");
+                    return;
+                }
+
+                // Kiểm tra email đã tồn tại chưa
+                ResultSet existingUser = db.getUserByEmail(email);
+                if (existingUser.next()) {
+                    showAlert("Email đã được đăng ký. Vui lòng đăng nhập.");
+                    return;
+                }
+
+                // Đăng ký user mới (password sẽ được hash tự động)
+                int userId = db.registerUser(name, email, password);
+                String avatarUrl = "https://api.dicebear.com/7.x/avataaars/svg?seed=" + email;
+
+                System.out.println("=== ĐĂNG KÝ THÀNH CÔNG ===");
+                System.out.println("User ID: " + userId);
+                System.out.println("Name: " + name);
+                System.out.println("Email: " + email);
+
+                // Chuyển sang Dashboard
+                navigateToDashboard(String.valueOf(userId), name, email, avatarUrl);
+
+            } else {
+                // ===== ĐĂNG NHẬP =====
+                int userId = db.authenticateUser(email, password);
+
+                if (userId == -1) {
+                    showAlert("Email hoặc mật khẩu không đúng.");
+                    return;
+                }
+
+                // Lấy thông tin user
+                ResultSet userInfo = db.getUserById(userId);
+                if (userInfo.next()) {
+                    String name = userInfo.getString("username");
+                    String avatarUrl = "https://api.dicebear.com/7.x/avataaars/svg?seed=" + email;
+
+                    System.out.println("=== ĐĂNG NHẬP THÀNH CÔNG ===");
+                    System.out.println("User ID: " + userId);
+                    System.out.println("Name: " + name);
+                    System.out.println("Email: " + email);
+
+                    // Chuyển sang Dashboard
+                    navigateToDashboard(String.valueOf(userId), name, email, avatarUrl);
+                } else {
+                    showAlert("Không tìm thấy thông tin người dùng.");
+                }
+            }
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+            showAlert("Lỗi kết nối database: " + e.getMessage());
+        }
+    }
+
+    /** Helper method để navigate sang Dashboard */
+    private void navigateToDashboard(String userId, String name, String email, String avatarUrl) {
+        // Nếu có callback -> dùng callback
+        if (loginCallback != null) {
+            loginCallback.onLogin(userId, name, email, avatarUrl);
             return;
         }
 
-        // Mock user
-        String id = UUID.randomUUID().toString().substring(0, 9);
-        String avatarUrl = "https://api.dicebear.com/7.x/avataaars/svg?seed=" + email;
-
-        System.out.println("=== LOGIN SUCCESS ===");
-        System.out.println("ID: " + id);
-        System.out.println("Name: " + name);
-        System.out.println("Email: " + email);
-        System.out.println("Avatar: " + avatarUrl);
-
-        // 🔥 Nếu App.java đã set callback -> dùng callback để navigate
-        if (loginCallback != null) {
-            loginCallback.onLogin(id, name, email, avatarUrl);
-            return; // dừng luôn, KHÔNG load FXML nữa
-        }
-
-        // ❗ Nếu không có callback -> fallback load Dashboard trực tiếp
+        // Nếu không có callback -> load Dashboard trực tiếp
         try {
             Stage stage = (Stage) submitButton.getScene().getWindow();
-            goToDashboard(stage, id, name, email, avatarUrl);
+            goToDashboard(stage, userId, name, email, avatarUrl);
         } catch (IOException e) {
             e.printStackTrace();
             showAlert("Không thể mở Dashboard. Vui lòng thử lại.");
@@ -91,39 +146,22 @@ public class LoginController {
     }
 
     /** Chuyển sang màn Dashboard và truyền thông tin user */
-    private void goToDashboard(Stage stage,
-                               String userId,
-                               String name,
-                               String email,
-                               String avatarUrl) throws IOException {
+    private void goToDashboard(Stage stage, String userId, String name, String email, String avatarUrl)
+            throws IOException {
+        // Lưu thông tin user vào App static fields
+        App.currentUserId = userId;
+        App.currentUserName = name;
+        App.currentUserEmail = email;
+        App.currentUserAvatar = avatarUrl;
 
-        // 1. thử load từ classpath
-        URL url = getClass().getResource("/fxml/dashboard.fxml");
-        System.out.println(">>> DASHBOARD FXML (classpath) = " + url);
-
-        // 2. nếu null thì fallback sang đường dẫn file (giống App)
-        if (url == null) {
-            File fxmlFile = new File("frontend/src/main/resources/fxml/dashboard.fxml");
-            System.out.println(">>> DASHBOARD FXML file exists = " + fxmlFile.exists()
-                    + ", path = " + fxmlFile.getAbsolutePath());
-            url = fxmlFile.toURI().toURL();
-        }
-
-        FXMLLoader loader = new FXMLLoader(url);
-        Scene scene = new Scene(loader.load(), 1200, 800);
-
-        // truyền user sang DashboardController
-        DashboardController controller = loader.getController();
-        controller.setUser(userId, name, email, avatarUrl);
-
-        stage.setScene(scene);
-        stage.setTitle("MeetHub - Dashboard");
-        stage.show();
+        // Navigate to Dashboard
+        App.goToDashboard();
     }
 
-
+    /** Cập nhật giao diện khi chuyển giữa đăng nhập và đăng ký */
     private void updateModeUI() {
         if (isSignUp) {
+            // Nếu là chế độ đăng ký
             titleLabel.setText("Tạo tài khoản");
             descriptionLabel.setText("Điền thông tin để tạo tài khoản mới");
             submitButton.setText("Tạo tài khoản");
@@ -131,6 +169,7 @@ public class LoginController {
             nameFieldContainer.setVisible(true);
             nameFieldContainer.setManaged(true);
         } else {
+            // Nếu là chế độ đăng nhập
             titleLabel.setText("Đăng nhập");
             descriptionLabel.setText("Đăng nhập để tham gia cuộc họp");
             submitButton.setText("Đăng nhập");
@@ -140,6 +179,7 @@ public class LoginController {
         }
     }
 
+    /** Hiển thị thông báo lỗi */
     private void showAlert(String msg) {
         Alert alert = new Alert(Alert.AlertType.WARNING);
         alert.setHeaderText(null);

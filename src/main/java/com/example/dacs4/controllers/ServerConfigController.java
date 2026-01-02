@@ -1,9 +1,8 @@
 package com.example.dacs4.controllers;
 
 import com.example.dacs4.App;
-import com.example.dacs4.network.SocketClient;
+import com.example.dacs4.network.PeerDiscovery;
 import javafx.fxml.FXML;
-import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.TextField;
 
@@ -11,9 +10,12 @@ import java.util.function.BiConsumer;
 
 public class ServerConfigController {
 
-    @FXML private TextField ipField;
-    @FXML private TextField portField;
-    @FXML private Label errorLabel;
+    @FXML
+    private TextField ipField;
+    @FXML
+    private TextField portField;
+    @FXML
+    private Label errorLabel;
 
     private BiConsumer<String, Integer> onConnectCallback;
 
@@ -40,15 +42,15 @@ public class ServerConfigController {
         }
 
         try {
-            SocketClient client = new SocketClient();
-            client.connect(ip, port);
+            // PeerDiscovery cần multicastAddress và port
+            PeerDiscovery client = new PeerDiscovery(ip, port);
 
-            com.example.dacs4.App.setSocketClient(client);
-
-            System.out.println("Connected to server!");
+            // Gọi discoverPeers() thay vì connect()
+            client.discoverPeers();
 
             App.setSocketClient(client);
 
+            System.out.println("Connected to server!");
             System.out.println("=== GO TO LOGIN ===");
             App.goToLogin();
 

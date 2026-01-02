@@ -8,6 +8,7 @@
 <BorderPane xmlns="http://javafx.com/javafx"
             xmlns:fx="http://javafx.com/fxml"
             fx:controller="com.example.dacs4.controllers.FileSharingController"
+            fx:id="root"
             style="-fx-background-color: #111827;">
     <stylesheets>
         <URL value="@../css/fileSharing.css"/>

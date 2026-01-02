@@ -3,10 +3,14 @@ package com.example.dacs4.controllers;
 import com.example.dacs4.models.Participant;
 import javafx.fxml.FXML;
 import javafx.scene.control.Label;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.*;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class VideoGridController {
 
@@ -14,6 +18,8 @@ public class VideoGridController {
     private GridPane videoGrid;
 
     private final List<Participant> participants = new ArrayList<>();
+    private final Map<String, ImageView> videoViews = new HashMap<>();
+    private final Map<String, Image> lastFrames = new HashMap<>();
     private String currentUserId;
 
     public void initialize() {
@@ -49,6 +55,7 @@ public class VideoGridController {
     private void renderGrid() {
         videoGrid.getChildren().clear();
         videoGrid.getColumnConstraints().clear();
+        videoViews.clear();
 
         int count = participants.size();
         int cols = calcColumns(count);
@@ -86,18 +93,17 @@ public class VideoGridController {
         tile.getStyleClass().add("video-tile");
 
         if (p.isVideoOn()) {
-            VBox ph = new VBox(8);
-            ph.setAlignment(javafx.geometry.Pos.CENTER);
-            ph.getStyleClass().add("video-placeholder");
-
-            Label icon = new Label("📹");
-            icon.getStyleClass().add("video-placeholder-icon");
-
-            Label text = new Label("Camera đang bật");
-            text.getStyleClass().add("video-placeholder-text");
-
-            ph.getChildren().addAll(icon, text);
-            tile.getChildren().add(ph);
+            // ImageView để hiển thị frame webcam
+            ImageView view = new ImageView();
+            view.setPreserveRatio(true);
+            view.setFitWidth(240);
+            view.setFitHeight(180);
+            videoViews.put(p.getId(), view);
+            Image last = lastFrames.get(p.getId());
+            if (last != null) {
+                view.setImage(last);
+            }
+            tile.getChildren().add(view);
         } else {
             Label avatar = new Label(p.getName().substring(0, 1).toUpperCase());
             avatar.getStyleClass().add("avatar-circle");
@@ -131,5 +137,17 @@ public class VideoGridController {
         tile.getChildren().add(wrapper);
 
         return tile;
+    }
+
+    /**
+     * Cập nhật frame video cho participant có userId tương ứng.
+     */
+    public void updateVideoFrame(String userId, Image image) {
+        if (userId == null || image == null) return;
+        lastFrames.put(userId, image);
+        ImageView view = videoViews.get(userId);
+        if (view != null) {
+            view.setImage(image);
+        }
     }
 }

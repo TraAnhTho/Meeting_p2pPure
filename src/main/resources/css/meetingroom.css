@@ -129,3 +129,12 @@
 .screen-share-button:hover {
     -fx-background-color: #059669;
 }
+
+/* ========== Control icons & texts (MeetingControls) ========== */
+.control-icon {
+    -fx-text-fill: white;
+}
+
+.control-text {
+    -fx-text-fill: white;
+}

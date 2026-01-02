@@ -65,18 +65,16 @@
                   styleClass="side-panel">
 
                 <StackPane fx:id="chatPanelRoot" VBox.vgrow="ALWAYS"
-                           visible="false" managed="false">
-                    <fx:include source="chat.fxml"/>
-                </StackPane>
+                           visible="false" managed="false"/>
 
                 <StackPane fx:id="participantsPanelRoot" VBox.vgrow="ALWAYS"
                            visible="false" managed="false">
-                    <fx:include source="participantsList.fxml"/>
+                    <fx:include fx:id="participantsList" source="participantsList.fxml"/>
                 </StackPane>
 
                 <StackPane fx:id="fileSharingPanelRoot" VBox.vgrow="ALWAYS"
                            visible="false" managed="false">
-                    <fx:include source="fileSharing.fxml"/>
+                    <fx:include fx:id="fileSharing" source="fileSharing.fxml"/>
                 </StackPane>
 
             </VBox>

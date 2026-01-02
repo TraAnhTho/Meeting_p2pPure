@@ -21,7 +21,8 @@ public class Participant {
         this.speaking = speaking;
     }
 
-    public Participant(String number, String a, boolean b, boolean audioOn, boolean videoOn) {
+    public Participant(String id, String name, boolean audioOn, boolean videoOn, boolean screenSharing) {
+        this(id, name, null, audioOn, videoOn, screenSharing, false);
     }
 
 

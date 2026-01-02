@@ -23,6 +23,7 @@ public class MeetingControlsController {
     @FXML private Label videoLabel;
     @FXML private Label screenShareLabel;
 
+    // Các thuộc tính BooleanProperty để theo dõi trạng thái của mic, camera và chia sẻ màn hình
     private final BooleanProperty audioOn = new SimpleBooleanProperty(true);
     private final BooleanProperty videoOn = new SimpleBooleanProperty(true);
     private final BooleanProperty screenSharing = new SimpleBooleanProperty(false);
@@ -31,84 +32,78 @@ public class MeetingControlsController {
 
     @FXML
     private void initialize() {
-        audioOn.addListener((o, oldV, newV) -> updateAudioUI());
-        videoOn.addListener((o, oldV, newV) -> updateVideoUI());
-        screenSharing.addListener((o, oldV, newV) -> updateScreenShareUI());
+        // Lắng nghe sự thay đổi trạng thái của mic, camera và chia sẻ màn hình
+        audioOn.addListener((observable, oldValue, newValue) -> updateUI(audioOn, audioIcon, audioLabel, "🎤", "🔇", "Tắt mic", "Bật mic"));
+        videoOn.addListener((observable, oldValue, newValue) -> updateUI(videoOn, videoIcon, videoLabel, "📹", "🚫📹", "Tắt camera", "Bật camera"));
+        screenSharing.addListener((observable, oldValue, newValue) -> updateUI(screenSharing, screenShareIcon, screenShareLabel, "🛑🖥", "🖥", "Dừng chia sẻ", "Chia sẻ"));
 
-        updateAudioUI();
-        updateVideoUI();
-        updateScreenShareUI();
+        // Cập nhật UI lần đầu tiên
+        updateUI(audioOn, audioIcon, audioLabel, "🎤", "🔇", "Tắt mic", "Bật mic");
+        updateUI(videoOn, videoIcon, videoLabel, "📹", "🚫📹", "Tắt camera", "Bật camera");
+        updateUI(screenSharing, screenShareIcon, screenShareLabel, "🛑🖥", "🖥", "Dừng chia sẻ", "Chia sẻ");
     }
 
-    // ===== UI Updates =====
-    private void updateAudioUI() {
-        if (audioOn.get()) {
-            audioIcon.setText("🎤");
-            audioLabel.setText("Tắt mic");
+    // Cập nhật UI chung cho các hành động (mic, camera, screen share)
+    private void updateUI(BooleanProperty property, Label iconLabel, Label textLabel, String activeIcon, String inactiveIcon, String activeText, String inactiveText) {
+        if (property.get()) {
+            iconLabel.setText(activeIcon);
+            textLabel.setText(activeText);
         } else {
-            audioIcon.setText("🔇");
-            audioLabel.setText("Bật mic");
+            iconLabel.setText(inactiveIcon);
+            textLabel.setText(inactiveText);
         }
     }
 
-    private void updateVideoUI() {
-        if (videoOn.get()) {
-            videoIcon.setText("📹");
-            videoLabel.setText("Tắt camera");
-        } else {
-            videoIcon.setText("🚫📹");
-            videoLabel.setText("Bật camera");
-        }
-    }
-
-    private void updateScreenShareUI() {
-        if (screenSharing.get()) {
-            screenShareIcon.setText("🛑🖥");
-            screenShareLabel.setText("Dừng chia sẻ");
-        } else {
-            screenShareIcon.setText("🖥");
-            screenShareLabel.setText("Chia sẻ");
-        }
-    }
-
-    // ===== Events =====
+    // Các sự kiện thay đổi trạng thái của mic, camera và chia sẻ màn hình
     @FXML
     private void onToggleAudio() {
-        audioOn.set(!audioOn.get());
+        audioOn.set(!audioOn.get());  // Toggle trạng thái mic
     }
 
     @FXML
     private void onToggleVideo() {
-        videoOn.set(!videoOn.get());
+        videoOn.set(!videoOn.get());  // Toggle trạng thái camera
     }
 
     @FXML
     private void onToggleScreenShare() {
-        screenSharing.set(!screenSharing.get());
+        screenSharing.set(!screenSharing.get());  // Toggle trạng thái chia sẻ màn hình
     }
 
+    // Sự kiện mở cài đặt
     @FXML
     private void onOpenSettings() {
-        System.out.println("Open settings clicked");
+        System.out.println("Mở cài đặt");
     }
 
+    // Sự kiện các tùy chọn khác
     @FXML
     private void onMoreOptions() {
-        System.out.println("More options clicked");
+        System.out.println("Mở thêm tùy chọn");
     }
 
+    // Sự kiện rời khỏi cuộc họp
     @FXML
     private void onLeaveMeeting() {
-        if (leaveMeetingCallback != null) leaveMeetingCallback.run();
+        if (leaveMeetingCallback != null) {
+            leaveMeetingCallback.run();  // Thực thi callback khi rời cuộc họp
+        }
     }
 
     // ===== Public API =====
-    public BooleanProperty audioOnProperty() { return audioOn; }
+    public BooleanProperty audioOnProperty() {
+        return audioOn;
+    }
 
-    public BooleanProperty videoOnProperty() { return videoOn; }
+    public BooleanProperty videoOnProperty() {
+        return videoOn;
+    }
 
-    public BooleanProperty screenSharingProperty() { return screenSharing; }
+    public BooleanProperty screenSharingProperty() {
+        return screenSharing;
+    }
 
+    // Cài đặt callback cho rời cuộc họp
     public void setLeaveMeetingCallback(Runnable callback) {
         this.leaveMeetingCallback = callback;
     }

@@ -4,6 +4,8 @@ import java.time.LocalDateTime;
 
 public class ChatMessage {
 
+
+
     public enum Type {
         TEXT,
         FILE
@@ -18,8 +20,8 @@ public class ChatMessage {
     private String fileName;
 
     public ChatMessage(String id, String senderId, String senderName,
-                       String text, LocalDateTime timestamp,
-                       Type type, String fileName) {
+            String text, LocalDateTime timestamp,
+            Type type, String fileName) {
         this.id = id;
         this.senderId = senderId;
         this.senderName = senderName;
@@ -29,12 +31,37 @@ public class ChatMessage {
         this.fileName = fileName;
     }
 
+    // Simplified constructor for text messages
+    public ChatMessage(String senderId, String senderName, String text, LocalDateTime timestamp) {
+        this(null, senderId, senderName, text, timestamp, Type.TEXT, null);
+    }
+
     // GETTERS ↓
-    public String getId() { return id; }
-    public String getSenderId() { return senderId; }
-    public String getSenderName() { return senderName; }
-    public String getText() { return text; }
-    public LocalDateTime getTimestamp() { return timestamp; }
-    public Type getType() { return type; }
-    public String getFileName() { return fileName; }
+    public String getId() {
+        return id;
+    }
+
+    public String getSenderId() {
+        return senderId;
+    }
+
+    public String getSenderName() {
+        return senderName;
+    }
+
+    public String getText() {
+        return text;
+    }
+
+    public LocalDateTime getTimestamp() {
+        return timestamp;
+    }
+
+    public Type getType() {
+        return type;
+    }
+
+    public String getFileName() {
+        return fileName;
+    }
 }
