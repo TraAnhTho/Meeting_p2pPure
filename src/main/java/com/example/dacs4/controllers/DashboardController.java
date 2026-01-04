@@ -130,16 +130,8 @@ public class DashboardController {
                 db.saveMeetingHistory(userId, newMeetingId, meetingTitle, "creator");
                 System.out.println("✅ Đã lưu meeting mới: " + newMeetingId + " - " + meetingTitle);
 
-                // Auto-register meeting in MeetingRegistry
-                try {
-                    String hostIp = java.net.InetAddress.getLocalHost().getHostAddress();
-                    int hostPort = 5000 + Math.abs(userId.hashCode() % 1000);
-                    MeetingRegistry.registerMeeting(newMeetingId, hostIp, hostPort);
-                    System.out
-                            .println("📝 Meeting auto-registered: " + newMeetingId + " at " + hostIp + ":" + hostPort);
-                } catch (Exception e) {
-                    System.err.println("⚠️ Warning: Could not auto-register meeting: " + e.getMessage());
-                }
+                // Note: Meeting will be registered in MeetingRegistry when P2P server starts
+                // in MeetingRoomP2PHandler.startConnection() -> P2PManager.createMeeting()
             } catch (SQLException e) {
                 e.printStackTrace();
                 System.err.println("❌ Lỗi khi lưu meeting history: " + e.getMessage());
