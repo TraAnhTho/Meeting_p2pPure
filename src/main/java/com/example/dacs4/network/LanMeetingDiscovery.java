@@ -67,20 +67,18 @@ public class LanMeetingDiscovery {
         String request = DISCOVER_PREFIX + meetingId;
         byte[] reqBytes = request.getBytes(StandardCharsets.UTF_8);
 
-        try (DatagramSocket sock = new DatagramSocket(null)) {
+        try (DatagramSocket sock = new DatagramSocket()) {
             sock.setReuseAddress(true);
             sock.setBroadcast(true);
-            // We may receive our own broadcast (self-echo) on Windows when bound to the discovery port.
             // Use a short socket timeout and loop until we get a valid MEETING_HOST response.
             sock.setSoTimeout(500);
 
-            // Bind to a fixed port so host replies land on a predictable port (easier for firewall rules)
-            try {
-                sock.bind(new InetSocketAddress("0.0.0.0", DISCOVERY_PORT));
-            } catch (Exception ignored) {
-            }
-
-            System.out.println("📡 LAN discovery broadcast on UDP " + DISCOVERY_PORT + ": " + request);
+            // IMPORTANT: do NOT bind to DISCOVERY_PORT on the client.
+            // On Windows, binding the client to the broadcast port often causes heavy self-echo
+            // and can starve or hide the actual MEETING_HOST reply.
+            // Let the OS pick an ephemeral source port; the host replies to packet.getPort().
+            System.out.println("📡 LAN discovery broadcast on UDP " + DISCOVERY_PORT + " (clientPort="
+                    + sock.getLocalPort() + "): " + request);
 
             // 1) Global broadcast
             try {
