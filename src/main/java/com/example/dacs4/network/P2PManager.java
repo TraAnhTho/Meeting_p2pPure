@@ -20,6 +20,7 @@ public class P2PManager {
     private boolean isHost = false;
 
     private final LanMeetingDiscovery lanDiscovery = new LanMeetingDiscovery();
+    private final LanMeetingMulticast mcast = new LanMeetingMulticast();
 
     private PeerServer server;
     private Map<String, PeerConnection> connections = new ConcurrentHashMap<>();
@@ -84,6 +85,14 @@ public class P2PManager {
         MeetingRegistry.registerMeeting(meetingId, myIp, serverPort);
         System.out.println("📝 Meeting registered in database: " + meetingId + " at " + myIp + ":" + serverPort);
 
+        // Multicast announce so other machines can find host without request/reply
+        try {
+            mcast.startAnnounce(meetingId, myIp, serverPort);
+        } catch (Exception e) {
+            System.err.println("❌ Failed to start multicast announce: " + e.getMessage());
+            System.err.println("⚠️ Warning: LAN multicast discovery may not work on this network");
+        }
+
         // Also start LAN discovery responder so other machines can find host
         try {
             lanDiscovery.startHostResponder(meetingId, serverPort);
@@ -130,14 +139,35 @@ public class P2PManager {
             }
         }
 
-        // Try LAN discovery FIRST (works across machines)
-        // Then fall back to database registry (only works on same machine)
-        System.out.println("🔍 Step 1: Trying LAN discovery for meeting: " + meetingId);
-        MeetingRegistry.HostInfo host = discoverHostViaLan(meetingId);
+        // Step 1: Try multicast discovery FIRST (host announces periodically)
+        // Step 2: Fallback to broadcast request/reply discovery
+        // Step 3: Fallback to local database (only works on same machine)
+        System.out.println("🔍 Step 1: Trying multicast discovery for meeting: " + meetingId);
+
+        MeetingRegistry.HostInfo host = null;
+        try {
+            LanMeetingMulticast.HostInfo hi = mcast.discoverHost(meetingId, 5000);
+            if (hi != null) {
+                host = new MeetingRegistry.HostInfo(hi.ip, hi.port);
+                System.out.println("📡 Found meeting via multicast: " + host.ip + ":" + host.port);
+                try {
+                    MeetingRegistry.registerMeeting(meetingId, host.ip, host.port);
+                } catch (Exception ignored) {
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("❌ Multicast discovery error: " + e.getMessage());
+        }
+
+        if (host == null) {
+            System.out.println("🔍 Step 2: Multicast failed, trying LAN broadcast discovery for meeting: " + meetingId);
+            host = discoverHostViaLan(meetingId);
+        }
+
         boolean hostFromRegistry = false;
 
         if (host == null) {
-            System.out.println("🔍 Step 2: LAN discovery failed, checking local database...");
+            System.out.println("🔍 Step 3: Discovery failed, checking local database...");
             host = MeetingRegistry.getMeetingHost(meetingId);
             hostFromRegistry = host != null;
 
@@ -147,7 +177,7 @@ public class P2PManager {
                 System.out.println("📝 Found meeting in local database: " + host.ip + ":" + host.port);
             }
         } else {
-            System.out.println("📡 Found meeting via LAN discovery: " + host.ip + ":" + host.port);
+            System.out.println("📡 Found meeting via discovery: " + host.ip + ":" + host.port);
             // Save to local database for future reference
             try {
                 MeetingRegistry.registerMeeting(meetingId, host.ip, host.port);
@@ -438,6 +468,11 @@ public class P2PManager {
      */
     public void stop() {
         System.out.println("🛑 Stopping P2PManager...");
+
+        try {
+            mcast.stopAnnounce();
+        } catch (Exception ignored) {
+        }
 
         try {
             lanDiscovery.stopHostResponder();
