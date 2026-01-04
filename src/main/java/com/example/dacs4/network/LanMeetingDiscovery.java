@@ -6,7 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Enumeration;
 
 public class LanMeetingDiscovery {
-    private static final int DISCOVERY_PORT = 5051;
+    private static final int DISCOVERY_PORT = 50555;
     private static final int SOCKET_TIMEOUT_MS = 1500;
 
     private static final String DISCOVER_PREFIX = "DISCOVER_MEETING|";
