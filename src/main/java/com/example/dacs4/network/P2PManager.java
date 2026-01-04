@@ -82,6 +82,7 @@ public class P2PManager {
         // Register meeting in registry
         String myIp = getLocalIp();
         MeetingRegistry.registerMeeting(meetingId, myIp, serverPort);
+        System.out.println("📝 Meeting registered in database: " + meetingId + " at " + myIp + ":" + serverPort);
 
         // Also start LAN discovery responder so other machines can find host
         try {
@@ -94,7 +95,8 @@ public class P2PManager {
                     "⚠️ Warning: Participants on other machines may not be able to discover this meeting via LAN");
         }
 
-        System.out.println("✅ Meeting created: " + meetingId + " at " + myIp + ":" + serverPort);
+        System.out.println("🎯 HOST READY! Meeting: " + meetingId + " | IP: " + myIp + " | Port: " + serverPort);
+        System.out.println("📢 Participants can now join using meeting code: " + meetingId);
     }
 
     /**
@@ -145,15 +147,18 @@ public class P2PManager {
         }
 
         try {
-            System.out.println("🔗 Connecting to meeting host: " + host.ip + ":" + host.port);
+            System.out.println("🔗 Attempting to connect to host: " + host.ip + ":" + host.port);
             connectToPeer(host.ip, host.port);
+            System.out.println("✅ Successfully connected to meeting host!");
         } catch (IOException firstConnectError) {
+            System.err.println("❌ Connection failed: " + firstConnectError.getMessage());
             String msg = firstConnectError.getMessage() != null ? firstConnectError.getMessage() : "";
             boolean refused = (firstConnectError instanceof java.net.ConnectException)
                     || msg.contains("Connection refused")
                     || msg.contains("refused");
 
             if (hostFromRegistry && refused) {
+                System.out.println("🔄 Retrying with LAN discovery...");
                 MeetingRegistry.HostInfo discovered = discoverHostViaLan(meetingId);
                 if (discovered != null) {
                     host = discovered;
@@ -162,9 +167,11 @@ public class P2PManager {
                     } catch (Exception ignored) {
                     }
                     System.out.println(
-                            "📡 Registry host refused; found host via LAN discovery: " + host.ip + ":" + host.port);
+                            "📡 Found host via LAN discovery: " + host.ip + ":" + host.port);
                     connectToPeer(host.ip, host.port);
+                    System.out.println("✅ Successfully connected via LAN discovery!");
                 } else {
+                    System.err.println("❌ LAN discovery also failed");
                     throw firstConnectError;
                 }
             } else {
