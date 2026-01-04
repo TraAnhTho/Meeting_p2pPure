@@ -84,7 +84,7 @@ You need **2 app instances** (same machine or two machines on the same LAN).
 - **Participant cannot join / Meeting not found**
   - Ensure both machines are on the same LAN.
   - Check Windows Firewall rules.
-  - Allow UDP discovery port `50555`.
+  - Allow UDP discovery port `9999`.
 
 - **Camera not working**
   - Ensure a webcam is available and not used by another app.
