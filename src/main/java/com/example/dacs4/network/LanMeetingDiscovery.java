@@ -7,7 +7,7 @@ import java.util.Enumeration;
 
 public class LanMeetingDiscovery {
     private static final int DISCOVERY_PORT = 9999;
-    private static final int SOCKET_TIMEOUT_MS = 1500;
+    private static final int SOCKET_TIMEOUT_MS = 3000;
 
     private static final String DISCOVER_PREFIX = "DISCOVER_MEETING|";
     private static final String RESPONSE_PREFIX = "MEETING_HOST|";
@@ -67,9 +67,16 @@ public class LanMeetingDiscovery {
         String request = DISCOVER_PREFIX + meetingId;
         byte[] reqBytes = request.getBytes(StandardCharsets.UTF_8);
 
-        try (DatagramSocket sock = new DatagramSocket()) {
+        try (DatagramSocket sock = new DatagramSocket(null)) {
+            sock.setReuseAddress(true);
             sock.setBroadcast(true);
             sock.setSoTimeout(SOCKET_TIMEOUT_MS);
+
+            // Bind to a fixed port so host replies land on a predictable port (easier for firewall rules)
+            try {
+                sock.bind(new InetSocketAddress("0.0.0.0", DISCOVERY_PORT));
+            } catch (Exception ignored) {
+            }
 
             System.out.println("📡 LAN discovery broadcast on UDP " + DISCOVERY_PORT + ": " + request);
 

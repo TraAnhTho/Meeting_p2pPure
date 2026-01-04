@@ -135,13 +135,7 @@ public class P2PManager {
         if (host == null) {
             host = discoverHostViaLan(meetingId);
             if (host == null) {
-                // Fallback: Try localhost for same-machine testing
-                // Use a deterministic port based on meeting ID so host and participant can find
-                // each other
-                System.out.println("⚠️ LAN discovery failed, trying localhost fallback for same-machine testing...");
-                int fallbackPort = 5000 + Math.abs(meetingId.hashCode() % 1000);
-                host = new MeetingRegistry.HostInfo("127.0.0.1", fallbackPort);
-                System.out.println("🔍 Attempting localhost connection on port: " + fallbackPort);
+                throw new IOException("Meeting not found: " + meetingId);
             } else {
                 try {
                     MeetingRegistry.registerMeeting(meetingId, host.ip, host.port);
