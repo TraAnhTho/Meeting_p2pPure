@@ -124,43 +124,72 @@ public class P2PManager {
             }
         }
 
-        // Get host info from registry
+        // Get host info from registry (may be stale across machines)
         MeetingRegistry.HostInfo host = MeetingRegistry.getMeetingHost(meetingId);
-        if (host == null) {
-            // Fallback: LAN discovery (registry is local-only per machine)
-            MeetingRegistry.HostInfo discovered = null;
-            int attempts = 3;
-            for (int i = 1; i <= attempts; i++) {
-                try {
-                    discovered = lanDiscovery.discoverHost(meetingId);
-                } catch (IOException ignored) {
-                }
-                if (discovered != null) break;
-                try {
-                    Thread.sleep(500);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-            }
+        boolean hostFromRegistry = host != null;
 
-            host = discovered;
+        if (host == null) {
+            host = discoverHostViaLan(meetingId);
             if (host == null) {
                 throw new IOException("Meeting not found: " + meetingId);
             }
-
             try {
                 MeetingRegistry.registerMeeting(meetingId, host.ip, host.port);
             } catch (Exception ignored) {
             }
         }
 
-        System.out.println("🔗 Connecting to meeting host: " + host.ip + ":" + host.port);
+        try {
+            System.out.println("🔗 Connecting to meeting host: " + host.ip + ":" + host.port);
+            connectToPeer(host.ip, host.port);
+        } catch (IOException firstConnectError) {
+            String msg = firstConnectError.getMessage() != null ? firstConnectError.getMessage() : "";
+            boolean refused = (firstConnectError instanceof java.net.ConnectException)
+                    || msg.contains("Connection refused")
+                    || msg.contains("refused");
 
-        // Connect to host
-        connectToPeer(host.ip, host.port);
+            if (hostFromRegistry && refused) {
+                MeetingRegistry.HostInfo discovered = discoverHostViaLan(meetingId);
+                if (discovered != null) {
+                    host = discovered;
+                    try {
+                        MeetingRegistry.registerMeeting(meetingId, host.ip, host.port);
+                    } catch (Exception ignored) {
+                    }
+                    System.out.println("📡 Registry host refused; found host via LAN discovery: " + host.ip + ":" + host.port);
+                    connectToPeer(host.ip, host.port);
+                } else {
+                    throw firstConnectError;
+                }
+            } else {
+                throw firstConnectError;
+            }
+        }
 
         System.out.println("✅ Joined meeting: " + meetingId);
+    }
+
+    private MeetingRegistry.HostInfo discoverHostViaLan(String meetingId) {
+        MeetingRegistry.HostInfo discovered = null;
+        int attempts = 3;
+        for (int i = 1; i <= attempts; i++) {
+            try {
+                discovered = lanDiscovery.discoverHost(meetingId);
+            } catch (IOException ignored) {
+            }
+            if (discovered != null) break;
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        return discovered;
+    }
+
+    public int getListeningPort() {
+        return serverPort;
     }
 
     /**

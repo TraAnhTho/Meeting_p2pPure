@@ -134,7 +134,8 @@ public class MeetingRoomP2PHandler {
             int myPort = BASE_PORT + Math.abs(userId.hashCode() % 1000);
             if ("creator".equals(role)) {
                 p2pManager.createMeeting(meetingId, userId, userName, myPort);
-                System.out.println("🎯 Created meeting on port " + myPort);
+                int actualPort = p2pManager.getListeningPort();
+                System.out.println("🎯 Created meeting on port " + actualPort);
                 connected = true;
             } else {
                 // Retry logic for joining meeting
