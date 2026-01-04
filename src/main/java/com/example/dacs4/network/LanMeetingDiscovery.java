@@ -7,7 +7,7 @@ import java.util.Enumeration;
 
 public class LanMeetingDiscovery {
     private static final int DISCOVERY_PORT = 5051;
-    private static final int SOCKET_TIMEOUT_MS = 800;
+    private static final int SOCKET_TIMEOUT_MS = 1500;
 
     private static final String DISCOVER_PREFIX = "DISCOVER_MEETING|";
     private static final String RESPONSE_PREFIX = "MEETING_HOST|";
@@ -20,7 +20,11 @@ public class LanMeetingDiscovery {
 
         serverSocket = new DatagramSocket(null);
         serverSocket.setReuseAddress(true);
-        serverSocket.bind(new InetSocketAddress(DISCOVERY_PORT));
+        serverSocket.setBroadcast(true);
+        serverSocket.bind(new InetSocketAddress("0.0.0.0", DISCOVERY_PORT));
+
+        System.out.println("📡 LAN discovery responder started on UDP " + DISCOVERY_PORT
+                + " (meeting " + meetingId + ", tcp " + hostTcpPort + ")");
 
         serverThread = new Thread(() -> {
             byte[] buf = new byte[1024];
@@ -35,7 +39,7 @@ public class LanMeetingDiscovery {
                     }
 
                     String reqMeetingId = msg.substring(DISCOVER_PREFIX.length()).trim();
-                    if (!meetingId.equals(reqMeetingId)) {
+                    if (!meetingId.equalsIgnoreCase(reqMeetingId)) {
                         continue;
                     }
 
@@ -45,6 +49,9 @@ public class LanMeetingDiscovery {
 
                     DatagramPacket resp = new DatagramPacket(respBytes, respBytes.length, packet.getAddress(), packet.getPort());
                     serverSocket.send(resp);
+
+                    System.out.println("📡 Discovery reply to " + packet.getAddress().getHostAddress() + ":" + packet.getPort()
+                            + " -> " + response);
                 } catch (IOException ignored) {
                     // ignore; socket closed or transient network error
                 } catch (Exception ignored) {
@@ -63,6 +70,8 @@ public class LanMeetingDiscovery {
         try (DatagramSocket sock = new DatagramSocket()) {
             sock.setBroadcast(true);
             sock.setSoTimeout(SOCKET_TIMEOUT_MS);
+
+            System.out.println("📡 LAN discovery broadcast on UDP " + DISCOVERY_PORT + ": " + request);
 
             // 1) Global broadcast
             try {
@@ -115,10 +124,11 @@ public class LanMeetingDiscovery {
                 return null;
             }
 
-            if (!meetingId.equals(respMeetingId)) {
+            if (!meetingId.equalsIgnoreCase(respMeetingId)) {
                 return null;
             }
 
+            System.out.println("📡 LAN discovery found host: " + ip + ":" + port);
             return new MeetingRegistry.HostInfo(ip, port);
         } catch (SocketTimeoutException e) {
             return null;

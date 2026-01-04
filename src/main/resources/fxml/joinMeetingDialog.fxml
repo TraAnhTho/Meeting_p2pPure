@@ -28,6 +28,14 @@
                            onKeyPressed="#onKeyPressed"/>
             </VBox>
 
+            <VBox spacing="6">
+                <Label text="Host (tuỳ chọn nếu discovery lỗi)"/>
+                <HBox spacing="8">
+                    <TextField fx:id="hostIpField" promptText="Host IP (VD: 192.168.1.102)" HBox.hgrow="ALWAYS"/>
+                    <TextField fx:id="hostPortField" promptText="Port (VD: 5049)" prefWidth="120"/>
+                </HBox>
+            </VBox>
+
             <HBox spacing="8" alignment="CENTER_RIGHT">
                 <Button text="Hủy" onAction="#onCancel"/>
                 <Button text="Tham gia"

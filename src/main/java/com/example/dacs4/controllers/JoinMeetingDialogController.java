@@ -1,5 +1,6 @@
 package com.example.dacs4.controllers;
 
+import com.example.dacs4.network.MeetingRegistry;
 import javafx.fxml.FXML;
 import javafx.scene.control.Button;
 import javafx.scene.control.DialogPane;
@@ -9,6 +10,8 @@ import javafx.stage.Stage;
 
 public class JoinMeetingDialogController {
     @FXML private TextField meetingIdField;
+    @FXML private TextField hostIpField;
+    @FXML private TextField hostPortField;
     @FXML private Button joinButton;
     @FXML private DialogPane dialogPane;
 
@@ -26,6 +29,18 @@ public class JoinMeetingDialogController {
     @FXML
     private void onJoin() {
         String id = meetingIdField.getText().trim();
+        String hostIp = hostIpField != null ? hostIpField.getText().trim() : "";
+        String hostPortText = hostPortField != null ? hostPortField.getText().trim() : "";
+
+        if (!hostIp.isEmpty() || !hostPortText.isEmpty()) {
+            try {
+                int hostPort = Integer.parseInt(hostPortText);
+                if (!hostIp.isEmpty() && hostPort > 0) {
+                    MeetingRegistry.registerMeeting(id, hostIp, hostPort);
+                }
+            } catch (Exception ignored) {
+            }
+        }
         if (!id.isEmpty() && onJoinCallback != null) {
             onJoinCallback.accept(id);
             closeDialog();
