@@ -112,23 +112,41 @@ public class LanMeetingDiscovery {
             sock.receive(resp);
 
             String msg = new String(resp.getData(), resp.getOffset(), resp.getLength(), StandardCharsets.UTF_8);
+            System.out.println("📥 LAN discovery received: " + msg + " from "
+                    + resp.getAddress().getHostAddress() + ":" + resp.getPort());
             if (!msg.startsWith(RESPONSE_PREFIX)) {
                 return null;
             }
 
             String payload = msg.substring(RESPONSE_PREFIX.length());
             String[] parts = payload.split("\\|", -1);
-            if (parts.length < 3) {
+            if (parts.length < 2) {
                 return null;
             }
 
             String respMeetingId = parts[0];
-            String ip = parts[1];
+            String ip;
             int port;
-            try {
-                port = Integer.parseInt(parts[2]);
-            } catch (Exception e) {
-                return null;
+
+            // Accept both formats:
+            // 1) MEETING_HOST|<meetingId>|<ip>|<port>
+            // 2) MEETING_HOST|<meetingId>|<port>  (ip inferred from packet source)
+            if (parts.length >= 3) {
+                // assume format (1)
+                ip = parts[1];
+                try {
+                    port = Integer.parseInt(parts[2]);
+                } catch (Exception e) {
+                    return null;
+                }
+            } else {
+                // format (2)
+                ip = resp.getAddress().getHostAddress();
+                try {
+                    port = Integer.parseInt(parts[1]);
+                } catch (Exception e) {
+                    return null;
+                }
             }
 
             if (!meetingId.equalsIgnoreCase(respMeetingId)) {

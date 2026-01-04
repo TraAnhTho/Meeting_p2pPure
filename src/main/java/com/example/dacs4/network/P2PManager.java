@@ -130,19 +130,28 @@ public class P2PManager {
             }
         }
 
-        // Get host info from registry (may be stale across machines)
-        MeetingRegistry.HostInfo host = MeetingRegistry.getMeetingHost(meetingId);
-        boolean hostFromRegistry = host != null;
+        // Try LAN discovery FIRST (works across machines)
+        // Then fall back to database registry (only works on same machine)
+        System.out.println("🔍 Step 1: Trying LAN discovery for meeting: " + meetingId);
+        MeetingRegistry.HostInfo host = discoverHostViaLan(meetingId);
+        boolean hostFromRegistry = false;
 
         if (host == null) {
-            host = discoverHostViaLan(meetingId);
+            System.out.println("🔍 Step 2: LAN discovery failed, checking local database...");
+            host = MeetingRegistry.getMeetingHost(meetingId);
+            hostFromRegistry = host != null;
+
             if (host == null) {
                 throw new IOException("Meeting not found: " + meetingId);
             } else {
-                try {
-                    MeetingRegistry.registerMeeting(meetingId, host.ip, host.port);
-                } catch (Exception ignored) {
-                }
+                System.out.println("📝 Found meeting in local database: " + host.ip + ":" + host.port);
+            }
+        } else {
+            System.out.println("📡 Found meeting via LAN discovery: " + host.ip + ":" + host.port);
+            // Save to local database for future reference
+            try {
+                MeetingRegistry.registerMeeting(meetingId, host.ip, host.port);
+            } catch (Exception ignored) {
             }
         }
 
