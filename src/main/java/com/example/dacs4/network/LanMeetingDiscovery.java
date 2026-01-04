@@ -70,7 +70,9 @@ public class LanMeetingDiscovery {
         try (DatagramSocket sock = new DatagramSocket(null)) {
             sock.setReuseAddress(true);
             sock.setBroadcast(true);
-            sock.setSoTimeout(SOCKET_TIMEOUT_MS);
+            // We may receive our own broadcast (self-echo) on Windows when bound to the discovery port.
+            // Use a short socket timeout and loop until we get a valid MEETING_HOST response.
+            sock.setSoTimeout(500);
 
             // Bind to a fixed port so host replies land on a predictable port (easier for firewall rules)
             try {
@@ -107,55 +109,61 @@ public class LanMeetingDiscovery {
             } catch (Exception ignored) {
             }
 
-            byte[] buf = new byte[1024];
-            DatagramPacket resp = new DatagramPacket(buf, buf.length);
-            sock.receive(resp);
-
-            String msg = new String(resp.getData(), resp.getOffset(), resp.getLength(), StandardCharsets.UTF_8);
-            System.out.println("📥 LAN discovery received: " + msg + " from "
-                    + resp.getAddress().getHostAddress() + ":" + resp.getPort());
-            if (!msg.startsWith(RESPONSE_PREFIX)) {
-                return null;
-            }
-
-            String payload = msg.substring(RESPONSE_PREFIX.length());
-            String[] parts = payload.split("\\|", -1);
-            if (parts.length < 2) {
-                return null;
-            }
-
-            String respMeetingId = parts[0];
-            String ip;
-            int port;
-
-            // Accept both formats:
-            // 1) MEETING_HOST|<meetingId>|<ip>|<port>
-            // 2) MEETING_HOST|<meetingId>|<port>  (ip inferred from packet source)
-            if (parts.length >= 3) {
-                // assume format (1)
-                ip = parts[1];
+            long deadline = System.currentTimeMillis() + SOCKET_TIMEOUT_MS;
+            while (System.currentTimeMillis() < deadline) {
                 try {
-                    port = Integer.parseInt(parts[2]);
-                } catch (Exception e) {
-                    return null;
-                }
-            } else {
-                // format (2)
-                ip = resp.getAddress().getHostAddress();
-                try {
-                    port = Integer.parseInt(parts[1]);
-                } catch (Exception e) {
-                    return null;
+                    byte[] buf = new byte[1024];
+                    DatagramPacket resp = new DatagramPacket(buf, buf.length);
+                    sock.receive(resp);
+
+                    String msg = new String(resp.getData(), resp.getOffset(), resp.getLength(), StandardCharsets.UTF_8);
+                    System.out.println("📥 LAN discovery received: " + msg + " from "
+                            + resp.getAddress().getHostAddress() + ":" + resp.getPort());
+
+                    if (!msg.startsWith(RESPONSE_PREFIX)) {
+                        continue;
+                    }
+
+                    String payload = msg.substring(RESPONSE_PREFIX.length());
+                    String[] parts = payload.split("\\|", -1);
+                    if (parts.length < 2) {
+                        continue;
+                    }
+
+                    String respMeetingId = parts[0];
+                    if (!meetingId.equalsIgnoreCase(respMeetingId)) {
+                        continue;
+                    }
+
+                    String ip;
+                    int port;
+
+                    // Accept both formats:
+                    // 1) MEETING_HOST|<meetingId>|<ip>|<port>
+                    // 2) MEETING_HOST|<meetingId>|<port>  (ip inferred from packet source)
+                    if (parts.length >= 3) {
+                        ip = parts[1];
+                        try {
+                            port = Integer.parseInt(parts[2]);
+                        } catch (Exception e) {
+                            continue;
+                        }
+                    } else {
+                        ip = resp.getAddress().getHostAddress();
+                        try {
+                            port = Integer.parseInt(parts[1]);
+                        } catch (Exception e) {
+                            continue;
+                        }
+                    }
+
+                    System.out.println("📡 LAN discovery found host: " + ip + ":" + port);
+                    return new MeetingRegistry.HostInfo(ip, port);
+                } catch (SocketTimeoutException ignored) {
+                    // keep looping until deadline
                 }
             }
 
-            if (!meetingId.equalsIgnoreCase(respMeetingId)) {
-                return null;
-            }
-
-            System.out.println("📡 LAN discovery found host: " + ip + ":" + port);
-            return new MeetingRegistry.HostInfo(ip, port);
-        } catch (SocketTimeoutException e) {
             return null;
         }
     }
