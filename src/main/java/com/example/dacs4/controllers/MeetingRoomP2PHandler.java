@@ -131,7 +131,12 @@ public class MeetingRoomP2PHandler {
         }
 
         try {
-            int myPort = BASE_PORT + Math.abs(userId.hashCode() % 1000);
+            // For host: use meetingId to determine port so participants can find it
+            // For participant: use userId to determine port (doesn't matter as much)
+            int myPort = "creator".equals(role)
+                    ? BASE_PORT + Math.abs(meetingId.hashCode() % 1000)
+                    : BASE_PORT + Math.abs(userId.hashCode() % 1000);
+
             if ("creator".equals(role)) {
                 p2pManager.createMeeting(meetingId, userId, userName, myPort);
                 int actualPort = p2pManager.getListeningPort();

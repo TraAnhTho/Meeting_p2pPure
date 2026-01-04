@@ -86,8 +86,12 @@ public class P2PManager {
         // Also start LAN discovery responder so other machines can find host
         try {
             lanDiscovery.startHostResponder(meetingId, serverPort);
+            System.out.println("✅ LAN discovery responder started for meeting: " + meetingId);
         } catch (Exception e) {
             System.err.println("❌ Failed to start LAN discovery responder: " + e.getMessage());
+            e.printStackTrace();
+            System.err.println(
+                    "⚠️ Warning: Participants on other machines may not be able to discover this meeting via LAN");
         }
 
         System.out.println("✅ Meeting created: " + meetingId + " at " + myIp + ":" + serverPort);
@@ -131,11 +135,18 @@ public class P2PManager {
         if (host == null) {
             host = discoverHostViaLan(meetingId);
             if (host == null) {
-                throw new IOException("Meeting not found: " + meetingId);
-            }
-            try {
-                MeetingRegistry.registerMeeting(meetingId, host.ip, host.port);
-            } catch (Exception ignored) {
+                // Fallback: Try localhost for same-machine testing
+                // Use a deterministic port based on meeting ID so host and participant can find
+                // each other
+                System.out.println("⚠️ LAN discovery failed, trying localhost fallback for same-machine testing...");
+                int fallbackPort = 5000 + Math.abs(meetingId.hashCode() % 1000);
+                host = new MeetingRegistry.HostInfo("127.0.0.1", fallbackPort);
+                System.out.println("🔍 Attempting localhost connection on port: " + fallbackPort);
+            } else {
+                try {
+                    MeetingRegistry.registerMeeting(meetingId, host.ip, host.port);
+                } catch (Exception ignored) {
+                }
             }
         }
 
@@ -156,7 +167,8 @@ public class P2PManager {
                         MeetingRegistry.registerMeeting(meetingId, host.ip, host.port);
                     } catch (Exception ignored) {
                     }
-                    System.out.println("📡 Registry host refused; found host via LAN discovery: " + host.ip + ":" + host.port);
+                    System.out.println(
+                            "📡 Registry host refused; found host via LAN discovery: " + host.ip + ":" + host.port);
                     connectToPeer(host.ip, host.port);
                 } else {
                     throw firstConnectError;
@@ -177,7 +189,8 @@ public class P2PManager {
                 discovered = lanDiscovery.discoverHost(meetingId);
             } catch (IOException ignored) {
             }
-            if (discovered != null) break;
+            if (discovered != null)
+                break;
             try {
                 Thread.sleep(500);
             } catch (InterruptedException e) {
@@ -341,7 +354,8 @@ public class P2PManager {
                 .append(serverPort);
 
         for (PeerInfo peer : peers.values()) {
-            if (peer == null || peer.getUserId() == null) continue;
+            if (peer == null || peer.getUserId() == null)
+                continue;
             sb.append(';')
                     .append(peer.getUserId()).append('|')
                     .append(peer.getUserName() != null ? peer.getUserName() : "").append('|')
@@ -365,7 +379,8 @@ public class P2PManager {
         int connectAttempts = 0;
         for (String entry : entries) {
             String[] parts = entry.split("\\|", -1);
-            if (parts.length < 4) continue;
+            if (parts.length < 4)
+                continue;
 
             String peerId = parts[0];
             String peerName = parts[1];
@@ -377,10 +392,14 @@ public class P2PManager {
                 continue;
             }
 
-            if (peerId == null || peerId.isBlank()) continue;
-            if (peerId.equals(currentUserId)) continue;
-            if (connections.containsKey(peerId)) continue;
-            if (ip == null || ip.isBlank() || port <= 0) continue;
+            if (peerId == null || peerId.isBlank())
+                continue;
+            if (peerId.equals(currentUserId))
+                continue;
+            if (connections.containsKey(peerId))
+                continue;
+            if (ip == null || ip.isBlank() || port <= 0)
+                continue;
 
             try {
                 connectToPeer(ip, port);
@@ -396,7 +415,8 @@ public class P2PManager {
                 pi.setIpAddress(ip);
                 pi.setPort(port);
             } catch (IOException e) {
-                System.err.println("❌ Failed to connect to peer from list: " + ip + ":" + port + " -> " + e.getMessage());
+                System.err
+                        .println("❌ Failed to connect to peer from list: " + ip + ":" + port + " -> " + e.getMessage());
             }
         }
 
