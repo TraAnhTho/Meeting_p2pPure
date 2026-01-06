@@ -78,7 +78,14 @@ public class ScreenShareSource {
 
                     long spent = System.currentTimeMillis() - t0;
                     long sleep = delayMs - spent;
-                    if (sleep > 0) Thread.sleep(sleep);
+                    if (sleep > 0) {
+                        try {
+                            Thread.sleep(sleep);
+                        } catch (InterruptedException ie) {
+                            // Treat as a normal stop signal
+                            break;
+                        }
+                    }
                 }
             } catch (Exception e) {
                 System.err.println("❌ ScreenShare capture failed: " + e.getMessage());

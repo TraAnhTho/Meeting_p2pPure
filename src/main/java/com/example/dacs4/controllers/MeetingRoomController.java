@@ -110,6 +110,7 @@ public class MeetingRoomController {
         if (meetingControlsController != null) {
             p2pHandler.setMeetingControlsController(meetingControlsController);
         }
+        p2pHandler.setMeetingRoomController(this);
         p2pHandler.setOnParticipantChanged(this::updateParticipantsUI);
         p2pHandler.setOnLeaveMeeting(this::handleLeaveMeeting);
         if (videoGridController != null) {
@@ -197,6 +198,16 @@ public class MeetingRoomController {
             meetingControlsController.videoOnProperty().set(false);
             suppressControlEvents = false;
         }
+    }
+
+    /**
+     * Allows external classes to programmatically update control states without
+     * triggering listeners.
+     * This prevents infinite event loops when the P2PHandler needs to reset UI
+     * controls.
+     */
+    public void setSuppressControlEvents(boolean suppress) {
+        this.suppressControlEvents = suppress;
     }
 
     public void setMeetingId(String meetingId) {

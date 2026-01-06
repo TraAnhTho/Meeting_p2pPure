@@ -2,6 +2,8 @@ package com.example.dacs4.network;
 
 import java.io.IOException;
 import java.net.*;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -18,6 +20,7 @@ public class VideoEngine {
     private DatagramSocket socket;
     private InetAddress remoteAddress;
     private int remotePort;
+    private final Map<String, InetSocketAddress> remoteTargets = new ConcurrentHashMap<>();
     private final AtomicBoolean running = new AtomicBoolean(false);
     /** Listener for raw frame bytes received from remote peer. */
     public interface FrameListener {
@@ -43,6 +46,22 @@ public class VideoEngine {
 
     public void setFrameListener(FrameListener listener) {
         this.frameListener = listener;
+    }
+
+    public void clearRemoteTargets() {
+        remoteTargets.clear();
+    }
+
+    public void addRemoteTarget(String peerId, String ip, int port) {
+        if (peerId == null || peerId.isBlank() || ip == null || ip.isBlank() || port <= 0) {
+            return;
+        }
+        try {
+            InetAddress addr = InetAddress.getByName(ip);
+            remoteTargets.put(peerId, new InetSocketAddress(addr, port));
+        } catch (Exception e) {
+            System.err.println("[VideoEngine] Invalid remote target " + ip + ":" + port + " -> " + e.getMessage());
+        }
     }
 
     /**
@@ -120,6 +139,31 @@ public class VideoEngine {
             socket.send(packet);
         } catch (IOException e) {
             System.err.println("[VideoEngine] Failed to send frame: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Send raw bytes to all configured remote targets.
+     * This keeps the UDP source port fixed (localPort) by reusing the bound socket.
+     */
+    public synchronized void sendFrameToAll(byte[] data) {
+        if (!running.get() || socket == null || socket.isClosed()) {
+            System.err.println("[VideoEngine] sendFrameToAll called while not running");
+            return;
+        }
+        if (remoteTargets.isEmpty()) {
+            return;
+        }
+        for (InetSocketAddress target : remoteTargets.values()) {
+            if (target == null) {
+                continue;
+            }
+            try {
+                DatagramPacket packet = new DatagramPacket(data, data.length, target.getAddress(), target.getPort());
+                socket.send(packet);
+            } catch (IOException e) {
+                System.err.println("[VideoEngine] Failed to send frame: " + e.getMessage());
+            }
         }
     }
 

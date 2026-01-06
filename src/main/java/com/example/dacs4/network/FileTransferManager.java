@@ -1,15 +1,18 @@
 package com.example.dacs4.network;
 
+import com.example.dacs4.controllers.FileSharingController;
 import com.example.dacs4.models.*;
 import java.io.*;
 import java.nio.file.*;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.function.Consumer;
 
 public class FileTransferManager {
     private static final int CHUNK_SIZE = 16 * 1024; // 64KB per chunk
     private P2PManager p2pManager;
+    private FileSharingController fileSharingController;
+    private java.util.function.Consumer<String> onFileReceivedUI;
 
     // Đang gửi: transferId -> FileTransferState
     private Map<String, FileTransferState> outgoingTransfers = new ConcurrentHashMap<>();
@@ -17,15 +20,16 @@ public class FileTransferManager {
     // Đang nhận: transferId -> FileReceiveState
     private Map<String, FileReceiveState> incomingTransfers = new ConcurrentHashMap<>();
 
-    // Callback UI khi nhận file xong (truyền tên file)
-    private Consumer<String> onFileReceivedUI;
-
     public FileTransferManager(P2PManager p2pManager) {
         this.p2pManager = p2pManager;
     }
 
-    public void setOnFileReceivedUI(Consumer<String> onFileReceivedUI) {
-        this.onFileReceivedUI = onFileReceivedUI;
+    public void setFileSharingController(FileSharingController controller) {
+        this.fileSharingController = controller;
+    }
+
+    public void setOnFileReceivedUI(java.util.function.Consumer<String> callback) {
+        this.onFileReceivedUI = callback;
     }
 
     /**
@@ -61,27 +65,27 @@ public class FileTransferManager {
         String fileName = message.getPayloadString("fileName");
         long fileSize = Long.parseLong(message.getPayloadString("fileSize"));
         String senderName = message.getPayloadString("senderName");
+        String senderId = message.getFrom();
         int totalChunks = Integer.parseInt(message.getPayloadString("totalChunks"));
 
         System.out.println("📥 Received file share request: " + fileName + " from " + senderName);
 
         // Auto-accept (hoặc show dialog cho user)
-        acceptFileTransfer(transferId, fileName, fileSize, totalChunks, message.getFrom());
+        acceptFileTransfer(transferId, fileName, fileSize, totalChunks, senderId, senderName);
     }
 
     /**
      * Chấp nhận nhận file
      */
     private void acceptFileTransfer(String transferId, String fileName, long fileSize,
-                                    int totalChunks, String senderId) {
+            int totalChunks, String senderId, String senderName) {
         try {
             // Tạo file để nhận
             Path downloadPath = Paths.get("downloads", fileName);
             Files.createDirectories(downloadPath.getParent());
 
             FileReceiveState state = new FileReceiveState(
-                    transferId, downloadPath.toFile(), fileSize, totalChunks
-            );
+                    transferId, downloadPath.toFile(), fileSize, totalChunks, senderId, senderName);
             incomingTransfers.put(transferId, state);
 
             // Gửi accept
@@ -132,8 +136,7 @@ public class FileTransferManager {
 
                 // Encode data as Base64
                 String encodedData = Base64.getEncoder().encodeToString(
-                        Arrays.copyOf(buffer, bytesRead)
-                );
+                        Arrays.copyOf(buffer, bytesRead));
                 chunk.addPayload("data", encodedData);
 
                 p2pManager.sendToPeer(receiverId, chunk);
@@ -219,16 +222,35 @@ public class FileTransferManager {
 
             System.out.println("✅ File received completely: " + state.file.getName());
 
-            // Gọi callback UI nếu có
             if (onFileReceivedUI != null) {
                 onFileReceivedUI.accept(state.file.getName());
             }
 
-            // Send complete message
+            // Add file to UI on receiver's side with sender info
+            if (fileSharingController != null) {
+                final String finalFileName = state.file.getName();
+                final String finalSenderId = state.senderId;
+                final String finalSenderName = state.senderName;
+
+                javafx.application.Platform.runLater(() -> {
+                    ChatMessage fileMsg = new ChatMessage(
+                            null,
+                            finalSenderId,
+                            finalSenderName,
+                            finalFileName,
+                            LocalDateTime.now(),
+                            ChatMessage.Type.FILE,
+                            finalFileName);
+                    fileSharingController.addFileMessage(fileMsg);
+                });
+            }
+
+            // Send complete message back to sender with receiver's info
             P2PMessage complete = new P2PMessage(MessageType.FILE_COMPLETE,
                     p2pManager.getCurrentUserId(), senderId);
             complete.addPayload("transferId", transferId);
             complete.addPayload("fileName", state.file.getName());
+            complete.addPayload("senderName", p2pManager.getCurrentUserName()); // Add sender name
             p2pManager.sendToPeer(senderId, complete);
 
             incomingTransfers.remove(transferId);
@@ -258,12 +280,16 @@ public class FileTransferManager {
         int totalChunks;
         int receivedChunks = 0;
         FileOutputStream fos;
+        String senderId;
+        String senderName;
 
-        FileReceiveState(String transferId, File file, long fileSize, int totalChunks) {
+        FileReceiveState(String transferId, File file, long fileSize, int totalChunks, String senderId,
+                String senderName) {
             this.file = file;
             this.fileSize = fileSize;
             this.totalChunks = totalChunks;
+            this.senderId = senderId;
+            this.senderName = senderName;
         }
     }
 }
-

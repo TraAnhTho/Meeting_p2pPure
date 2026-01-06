@@ -5,6 +5,7 @@ import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.Enumeration;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.IntSupplier;
 
 public class LanMeetingMulticast {
 
@@ -21,15 +22,28 @@ public class LanMeetingMulticast {
     public static class HostInfo {
         public final String ip;
         public final int port;
+        public final Integer participants;
 
         public HostInfo(String ip, int port) {
             this.ip = ip;
             this.port = port;
+            this.participants = null;
+        }
+
+        public HostInfo(String ip, int port, Integer participants) {
+            this.ip = ip;
+            this.port = port;
+            this.participants = participants;
         }
     }
 
     /** HOST: start announcing MEETING_HOST|CODE|IP|PORT every 500ms–1s */
     public void startAnnounce(String meetingCode, String hostIp, int tcpPort) throws IOException {
+        startAnnounce(meetingCode, hostIp, tcpPort, null);
+    }
+
+    public void startAnnounce(String meetingCode, String hostIp, int tcpPort, IntSupplier participantsSupplier)
+            throws IOException {
         stopAnnounce();
 
         group = InetAddress.getByName(MCAST_ADDR);
@@ -46,7 +60,18 @@ public class LanMeetingMulticast {
         announceThread = new Thread(() -> {
             while (announcing.get()) {
                 try {
-                    String msg = "MEETING_HOST|" + meetingCode + "|" + hostIp + "|" + tcpPort;
+                    String msg;
+                    if (participantsSupplier != null) {
+                        int pCount;
+                        try {
+                            pCount = participantsSupplier.getAsInt();
+                        } catch (Exception e) {
+                            pCount = -1;
+                        }
+                        msg = "MEETING_HOST|" + meetingCode + "|" + hostIp + "|" + tcpPort + "|" + pCount;
+                    } else {
+                        msg = "MEETING_HOST|" + meetingCode + "|" + hostIp + "|" + tcpPort;
+                    }
                     byte[] buf = msg.getBytes(StandardCharsets.UTF_8);
                     DatagramPacket packet = new DatagramPacket(buf, buf.length, group, MCAST_PORT);
                     announceSocket.send(packet);
@@ -106,10 +131,18 @@ public class LanMeetingMulticast {
 
                     // Expected: MEETING_HOST|CODE|IP|PORT
                     String[] p = msg.split("\\|", -1);
-                    if (p.length == 4 && "MEETING_HOST".equals(p[0]) && meetingCode.equals(p[1])) {
+                    if (p.length >= 4 && "MEETING_HOST".equals(p[0]) && meetingCode.equals(p[1])) {
                         String ip = p[2];
                         int port = Integer.parseInt(p[3]);
                         System.out.println("✅ Found host via multicast: " + ip + ":" + port);
+                        if (p.length >= 5) {
+                            try {
+                                Integer participants = Integer.parseInt(p[4]);
+                                return new HostInfo(ip, port, participants);
+                            } catch (Exception ignored) {
+                                return new HostInfo(ip, port);
+                            }
+                        }
                         return new HostInfo(ip, port);
                     }
                 } catch (SocketTimeoutException ignored) {
@@ -119,6 +152,22 @@ public class LanMeetingMulticast {
         }
 
         return null;
+    }
+
+    public void announceClosed(String meetingCode) throws IOException {
+        InetAddress group = InetAddress.getByName(MCAST_ADDR);
+        NetworkInterface ni = pickLanInterface();
+        if (ni == null)
+            throw new IOException("Cannot find LAN network interface for multicast");
+
+        try (MulticastSocket sock = new MulticastSocket()) {
+            sock.setTimeToLive(1);
+            sock.setNetworkInterface(ni);
+            String msg = "MEETING_CLOSED|" + meetingCode;
+            byte[] buf = msg.getBytes(StandardCharsets.UTF_8);
+            DatagramPacket packet = new DatagramPacket(buf, buf.length, group, MCAST_PORT);
+            sock.send(packet);
+        }
     }
 
     /** Pick a usable LAN interface (similar logic to your friend's code) */

@@ -31,7 +31,7 @@ public class App extends Application {
     @Override
     public void start(Stage stage) {
         this.mainStage = stage;
-        goToLogin(); // 🔥 Bỏ ServerConfig, chuyển thẳng sang Login
+        goToLogin();
     }
 
     private URL getFXML(String name) {

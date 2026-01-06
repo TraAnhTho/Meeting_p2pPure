@@ -19,6 +19,10 @@ import java.awt.image.BufferedImage;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 
 /** P2P Handler - Quản lý P2P logic cho MeetingRoom */
 public class MeetingRoomP2PHandler {
@@ -42,6 +46,9 @@ public class MeetingRoomP2PHandler {
     private volatile String currentScreenSharerId = null; // who is currently sharing
     private ScreenFrameBroadcaster screenBroadcaster;
 
+    private volatile long lastScreenFrameAtMs = 0;
+    private ScheduledExecutorService screenWatchdog;
+
     private boolean connected = false;
     private boolean autoAudioStarted = false;
 
@@ -56,7 +63,7 @@ public class MeetingRoomP2PHandler {
     private ChatController chatController;
     private FileSharingController fileSharingController;
     private MeetingControlsController meetingControlsController;
-    private boolean suppressControlEvents = false;
+    private MeetingRoomController meetingRoomController;
 
     public void setVideoGridController(VideoGridController controller) {
         this.videoGridController = controller;
@@ -131,16 +138,10 @@ public class MeetingRoomP2PHandler {
         }
 
         try {
-            // For host: use meetingId to determine port so participants can find it
-            // For participant: use userId to determine port (doesn't matter as much)
-            int myPort = "creator".equals(role)
-                    ? BASE_PORT + Math.abs(meetingId.hashCode() % 1000)
-                    : BASE_PORT + Math.abs(userId.hashCode() % 1000);
-
+            int myPort = BASE_PORT + Math.abs(userId.hashCode() % 1000);
             if ("creator".equals(role)) {
                 p2pManager.createMeeting(meetingId, userId, userName, myPort);
-                int actualPort = p2pManager.getListeningPort();
-                System.out.println("🎯 Created meeting on port " + actualPort);
+                System.out.println("🎯 Created meeting on port " + myPort);
                 connected = true;
             } else {
                 // Retry logic for joining meeting
@@ -266,12 +267,15 @@ public class MeetingRoomP2PHandler {
                         Platform.runLater(() -> {
                             videoGridController.showScreen(finalRemoteId, finalFxImg);
                             currentScreenSharerId = finalRemoteId;
+                            lastScreenFrameAtMs = System.currentTimeMillis();
                         });
                     } else {
                         System.err.println("❌ Failed to decode screen frame from " + remoteId);
                     }
                 });
                 System.out.println("✅ Screen receiver started on port " + myScreenPort);
+
+                startScreenWatchdog();
             } catch (Exception e) {
                 System.err.println("❌ Error starting screen receiver: " + e.getMessage());
             }
@@ -348,6 +352,7 @@ public class MeetingRoomP2PHandler {
         stopAudioStreaming();
         stopVideoStreaming();
         stopScreenShare();
+        stopScreenWatchdog();
         if (videoEngine != null) {
             videoEngine.stop();
         }
@@ -373,6 +378,59 @@ public class MeetingRoomP2PHandler {
         autoAudioStarted = false;
     }
 
+    private void startScreenWatchdog() {
+        if (screenWatchdog != null) {
+            return;
+        }
+
+        ThreadFactory tf = r -> {
+            Thread t = new Thread(r, "screen-share-watchdog");
+            t.setDaemon(true);
+            return t;
+        };
+        screenWatchdog = Executors.newSingleThreadScheduledExecutor(tf);
+
+        // If we stop receiving frames from current screen sharer, auto-hide after timeout.
+        // This covers cases where SCREEN_SHARE_STOP message is lost.
+        screenWatchdog.scheduleAtFixedRate(() -> {
+            try {
+                String sharer = currentScreenSharerId;
+                if (sharer == null) {
+                    return;
+                }
+                if (isScreenSharing && sharer.equals(currentUserId)) {
+                    return; // local user is sharing; never auto-hide
+                }
+                long last = lastScreenFrameAtMs;
+                if (last <= 0) {
+                    return;
+                }
+                long now = System.currentTimeMillis();
+                if (now - last > 3000) {
+                    currentScreenSharerId = null;
+                    lastScreenFrameAtMs = 0;
+                    if (videoGridController != null) {
+                        Platform.runLater(() -> videoGridController.hideScreen());
+                    }
+                    if (onParticipantChanged != null) {
+                        Platform.runLater(onParticipantChanged);
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }, 1, 1, TimeUnit.SECONDS);
+    }
+
+    private void stopScreenWatchdog() {
+        if (screenWatchdog != null) {
+            try {
+                screenWatchdog.shutdownNow();
+            } catch (Exception ignored) {
+            }
+            screenWatchdog = null;
+        }
+    }
+
     public boolean isConnected() {
         return connected;
     }
@@ -380,6 +438,14 @@ public class MeetingRoomP2PHandler {
     private void handleP2PMessage(P2PMessage message) {
         System.out.println("📥 Handling P2P message: " + message.getType());
         switch (message.getType()) {
+            case PEER_LIST_RESPONSE:
+                if (onParticipantChanged != null) {
+                    onParticipantChanged.run();
+                }
+                if (isVideoStreaming) {
+                    syncVideoTargets();
+                }
+                break;
             case CHAT_MESSAGE:
                 handleChatMessage(message);
                 break;
@@ -567,44 +633,41 @@ public class MeetingRoomP2PHandler {
                 System.out.println("📹 VideoEngine initialized on port " + myVideoPort);
             }
 
-            var peers = p2pManager.getPeers();
-            if (!peers.isEmpty()) {
-                PeerInfo firstPeer = peers.values().iterator().next();
-                int peerVideoPort = VIDEO_BASE_PORT + Math.abs(firstPeer.getUserId().hashCode() % 1000);
-                String peerIp = firstPeer.getIpAddress() != null ? firstPeer.getIpAddress() : "127.0.0.1";
-                videoEngine.start(peerIp, peerVideoPort);
+            // Ensure UDP receiver is running so we bind to our fixed local port
+            videoEngine.startReceiver();
 
-                if (webcamSource == null) {
-                    webcamSource = new WebcamVideoSource();
-                }
+            syncVideoTargets();
 
-                if (webcamSource.isAvailable()) {
-                    webcamSource.setLocalFrameCallback(fxImage -> {
-                        if (fxImage == null)
-                            return;
-                        if (onRemoteVideoFrame != null && currentUserId != null) {
-                            Platform.runLater(() -> onRemoteVideoFrame.accept(currentUserId, fxImage));
-                        }
-                        if (videoGridController != null && currentUserId != null) {
-                            Platform.runLater(() -> videoGridController.updateVideoFrame(currentUserId, fxImage));
-                        }
-                    });
-
-                    webcamSource.setEncodedFrameCallback(bytes -> {
-                        if (bytes != null && videoEngine != null) {
-                            videoEngine.sendFrame(bytes);
-                        }
-                    });
-
-                    webcamSource.start();
-                    System.out.println("📷 Webcam capture started");
-                } else {
-                    System.out.println("⚠️ No webcam available, video will not send frames");
-                }
-
-                isVideoStreaming = true;
-                System.out.println("📹 Video streaming started (real webcam frames)");
+            if (webcamSource == null) {
+                webcamSource = new WebcamVideoSource();
             }
+
+            if (webcamSource.isAvailable()) {
+                webcamSource.setLocalFrameCallback(fxImage -> {
+                    if (fxImage == null)
+                        return;
+                    if (onRemoteVideoFrame != null && currentUserId != null) {
+                        Platform.runLater(() -> onRemoteVideoFrame.accept(currentUserId, fxImage));
+                    }
+                    if (videoGridController != null && currentUserId != null) {
+                        Platform.runLater(() -> videoGridController.updateVideoFrame(currentUserId, fxImage));
+                    }
+                });
+
+                webcamSource.setEncodedFrameCallback(bytes -> {
+                    if (bytes != null && videoEngine != null) {
+                        videoEngine.sendFrameToAll(bytes);
+                    }
+                });
+
+                webcamSource.start();
+                System.out.println("📷 Webcam capture started");
+            } else {
+                System.out.println("⚠️ No webcam available, video will not send frames");
+            }
+
+            isVideoStreaming = true;
+            System.out.println("📹 Video streaming started (real webcam frames)");
         } catch (Exception e) {
             System.err.println("❌ Error starting video: " + e.getMessage());
             e.printStackTrace();
@@ -617,8 +680,29 @@ public class MeetingRoomP2PHandler {
                 webcamSource.stop();
                 System.out.println("📷 Webcam capture stopped");
             }
+            if (videoEngine != null) {
+                videoEngine.clearRemoteTargets();
+            }
             isVideoStreaming = false;
             System.out.println("🛑 Video streaming stopped");
+        }
+    }
+
+    private void syncVideoTargets() {
+        if (videoEngine == null || p2pManager == null) {
+            return;
+        }
+        videoEngine.clearRemoteTargets();
+        for (PeerInfo peer : p2pManager.getPeers().values()) {
+            if (peer == null || peer.getUserId() == null) {
+                continue;
+            }
+            String ip = peer.getIpAddress();
+            if (ip == null || ip.isBlank()) {
+                continue;
+            }
+            int peerVideoPort = VIDEO_BASE_PORT + Math.abs(peer.getUserId().hashCode() % 1000);
+            videoEngine.addRemoteTarget(peer.getUserId(), ip, peerVideoPort);
         }
     }
 
@@ -684,6 +768,10 @@ public class MeetingRoomP2PHandler {
         this.meetingControlsController = controller;
     }
 
+    public void setMeetingRoomController(MeetingRoomController controller) {
+        this.meetingRoomController = controller;
+    }
+
     public void setOnParticipantChanged(Runnable callback) {
         this.onParticipantChanged = callback;
     }
@@ -730,11 +818,11 @@ public class MeetingRoomP2PHandler {
                 alert.showAndWait();
             });
             // Reset toggle button
-            if (meetingControlsController != null) {
+            if (meetingControlsController != null && meetingRoomController != null) {
                 Platform.runLater(() -> {
-                    suppressControlEvents = true;
+                    meetingRoomController.setSuppressControlEvents(true);
                     meetingControlsController.screenSharingProperty().set(false);
-                    suppressControlEvents = false;
+                    meetingRoomController.setSuppressControlEvents(false);
                 });
             }
             return;
@@ -859,11 +947,11 @@ public class MeetingRoomP2PHandler {
                 alert.showAndWait();
             });
             stopScreenShare();
-            if (meetingControlsController != null) {
+            if (meetingControlsController != null && meetingRoomController != null) {
                 Platform.runLater(() -> {
-                    suppressControlEvents = true;
+                    meetingRoomController.setSuppressControlEvents(true);
                     meetingControlsController.screenSharingProperty().set(false);
-                    suppressControlEvents = false;
+                    meetingRoomController.setSuppressControlEvents(false);
                 });
             }
         }
@@ -965,4 +1053,5 @@ public class MeetingRoomP2PHandler {
             }
         }
     }
+
 }

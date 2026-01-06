@@ -2,6 +2,7 @@ package com.example.dacs4.network;
 
 import com.example.dacs4.models.P2PMessage;
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.net.Socket;
 
 public class PeerConnection implements Runnable {
@@ -33,7 +34,7 @@ public class PeerConnection implements Runnable {
             // Listen for messages
             while (running && !socket.isClosed()) {
                 try {
-                    String messageJson = input.readUTF();
+                    String messageJson = readMessageString();
                     P2PMessage message = P2PMessage.fromJson(messageJson);
 
                     // Handle message
@@ -58,35 +59,60 @@ public class PeerConnection implements Runnable {
     }
 
     private void performHandshake() throws IOException {
+        System.out.println("🤝 DEBUG: Starting handshake...");
+
         // Send my info
+        System.out.println("📤 DEBUG: Sending my info - userId=" + manager.getCurrentUserId() + ", userName="
+                + manager.getCurrentUserName() + ", port=" + manager.getServerPort());
         output.writeUTF(manager.getCurrentUserId());
         output.writeUTF(manager.getCurrentUserName());
         output.writeInt(manager.getServerPort());
         output.flush();
+        System.out.println("✅ DEBUG: Sent my info successfully");
 
         // Receive peer info
+        System.out.println("📥 DEBUG: Waiting to receive peer info...");
         this.peerId = input.readUTF();
         this.peerName = input.readUTF();
         this.peerListenPort = input.readInt();
 
         System.out.println("🤝 Handshake complete with peer: " + peerName + " (" + peerId + ") port=" + peerListenPort);
+        System.out.println("✅ DEBUG: Handshake successful! Will now call manager.onPeerConnected()");
     }
 
     public void sendMessage(P2PMessage message) {
         try {
             synchronized (output) {
-                output.writeUTF(message.toJson());
-                output.flush();
+                writeMessageString(message.toJson());
             }
         } catch (IOException e) {
             String err = e.getMessage() != null ? e.getMessage() : "";
             System.err.println("❌ Error sending message to peer " + peerId + ": " + err);
-            if (err.contains("too long") || err.contains("encoded string")) {
-                return;
-            }
-
             close();
         }
+    }
+
+    /**
+     * Read a length-prefixed UTF-8 message.
+     *
+     * We avoid DataInputStream.readUTF()/writeUTF() because it has a ~64KB limit
+     * that breaks file transfer chunks and other larger messages.
+     */
+    private String readMessageString() throws IOException {
+        int len = input.readInt();
+        if (len < 0) {
+            throw new EOFException("Negative message length");
+        }
+        byte[] buf = new byte[len];
+        input.readFully(buf);
+        return new String(buf, StandardCharsets.UTF_8);
+    }
+
+    private void writeMessageString(String message) throws IOException {
+        byte[] bytes = message.getBytes(StandardCharsets.UTF_8);
+        output.writeInt(bytes.length);
+        output.write(bytes);
+        output.flush();
     }
 
     public void close() {
@@ -127,12 +153,14 @@ public class PeerConnection implements Runnable {
     }
 
     public String getRemoteIpAddress() {
-        if (socket == null || socket.getInetAddress() == null) return null;
+        if (socket == null || socket.getInetAddress() == null)
+            return null;
         return socket.getInetAddress().getHostAddress();
     }
 
     public int getRemotePort() {
-        if (socket == null) return -1;
+        if (socket == null)
+            return -1;
         return socket.getPort();
     }
 }

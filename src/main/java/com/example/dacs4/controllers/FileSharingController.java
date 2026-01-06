@@ -60,14 +60,27 @@ public class FileSharingController {
     }
 
     public void setMessages(ObservableList<ChatMessage> fileMessages) {
+        System.out.println("🔍 DEBUG: FileSharingController.setMessages() called");
+        System.out.println("📊 DEBUG: Observable list size: " + (fileMessages != null ? fileMessages.size() : "null"));
         this.fileMessages = fileMessages;
         filesListView.setItems(fileMessages);
+        System.out.println("✅ DEBUG: ListView items set successfully");
     }
 
     public void addFileMessage(ChatMessage msg) {
-        if (fileMessages != null) {
-            fileMessages.add(msg);
+        System.out.println("🔍 DEBUG: FileSharingController.addFileMessage() called");
+        System.out.println("📄 DEBUG: Message - fileName=" + (msg != null ? msg.getFileName() : "null") + ", sender="
+                + (msg != null ? msg.getSenderName() : "null"));
+
+        if (fileMessages == null) {
+            System.err.println("❌ ERROR: fileMessages is NULL! Cannot add message.");
+            System.err.println("⚠️ This means setMessages() was not called or controller not initialized!");
+            return;
         }
+
+        System.out.println("📊 DEBUG: Current fileMessages size before add: " + fileMessages.size());
+        fileMessages.add(msg);
+        System.out.println("✅ DEBUG: File message added successfully. New size: " + fileMessages.size());
     }
 
     // ========== Xử lý chọn file ==========
@@ -129,12 +142,17 @@ public class FileSharingController {
 
         @Override
         protected void updateItem(ChatMessage msg, boolean empty) {
+            System.out.println("🔍 DEBUG: FileMessageCell.updateItem() called - empty=" + empty + ", msg="
+                    + (msg != null ? msg.getFileName() : "null"));
             super.updateItem(msg, empty);
 
             if (empty || msg == null) {
+                System.out.println("⚠️ DEBUG: Cell is empty or msg is null, setting graphic to null");
                 setGraphic(null);
                 return;
             }
+
+            System.out.println("✅ DEBUG: Rendering cell for file: " + msg.getFileName());
 
             String fileName = msg.getFileName() != null ? msg.getFileName() : msg.getText();
             fileNameLabel.setText(fileName);
@@ -165,7 +183,8 @@ public class FileSharingController {
 
             if (isImage && hasLocalFile) {
                 thumbnailView.setOnMouseClicked(ev -> {
-                    if (ev.getButton() != MouseButton.PRIMARY) return;
+                    if (ev.getButton() != MouseButton.PRIMARY)
+                        return;
                     showImagePreview(localPath, fileName);
                 });
             } else {
@@ -207,12 +226,14 @@ public class FileSharingController {
     }
 
     private Path resolveDownloadedPath(String fileName) {
-        if (fileName == null || fileName.isBlank()) return null;
+        if (fileName == null || fileName.isBlank())
+            return null;
         return Paths.get("downloads", fileName);
     }
 
     private boolean isImageFile(String fileName) {
-        if (fileName == null) return false;
+        if (fileName == null)
+            return false;
         String lower = fileName.toLowerCase();
         return lower.endsWith(".jpg") || lower.endsWith(".jpeg")
                 || lower.endsWith(".png") || lower.endsWith(".gif");
@@ -239,7 +260,8 @@ public class FileSharingController {
             chooser.setTitle("Lưu tệp về máy");
             chooser.setInitialFileName(fileName);
             File dest = chooser.showSaveDialog(root.getScene().getWindow());
-            if (dest == null) return;
+            if (dest == null)
+                return;
 
             Files.copy(src, dest.toPath(), StandardCopyOption.REPLACE_EXISTING);
         } catch (Exception ex) {

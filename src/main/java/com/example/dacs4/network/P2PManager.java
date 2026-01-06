@@ -6,265 +6,105 @@ import com.example.dacs4.models.PeerInfo;
 
 import java.io.IOException;
 import java.net.InetAddress;
-import java.net.Socket;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
+/**
+ * P2PManager - Coordinator for peer-to-peer networking
+ * Delegates responsibilities to specialized service classes
+ */
 public class P2PManager {
-    private String currentUserId;
-    private String currentUserName;
-    private String currentMeetingId;
-    private int serverPort;
 
-    private boolean isHost = false;
-
-    private final LanMeetingDiscovery lanDiscovery = new LanMeetingDiscovery();
-    private final LanMeetingMulticast mcast = new LanMeetingMulticast();
-
-    private PeerServer server;
-    private Map<String, PeerConnection> connections = new ConcurrentHashMap<>();
-    private Map<String, PeerInfo> peers = new ConcurrentHashMap<>();
+    // Delegate to specialized managers
+    private final PeerStateManager peerStateManager = new PeerStateManager();
+    private final P2PConnectionManager connectionManager = new P2PConnectionManager(this);
+    private final MeetingDiscoveryService discoveryService = new MeetingDiscoveryService();
+    private final PeerListManager peerListManager = new PeerListManager(peerStateManager, connectionManager);
+    private final MeetingLifecycleManager lifecycleManager;
 
     // Event listeners
-    private List<Consumer<PeerInfo>> peerJoinedListeners = new ArrayList<>();
-    private List<Consumer<String>> peerLeftListeners = new ArrayList<>();
     private List<Consumer<P2PMessage>> messageListeners = new ArrayList<>();
 
     public P2PManager() {
+        // Initialize lifecycle manager with dependencies
+        this.lifecycleManager = new MeetingLifecycleManager(discoveryService, connectionManager, this);
     }
 
-    /**
-     * Start peer server on specified port
-     */
-    public void startServer(int port) throws IOException {
-        if (server != null && server.isRunning()) {
-            System.out.println("⚠️ Server already running on port " + serverPort);
-            return;
-        }
-
-        this.serverPort = port;
-        server = new PeerServer(port, this);
-        new Thread(server, "PeerServer-" + port).start();
-        System.out.println("🚀 P2PManager started on port " + port);
-    }
+    // ===== Meeting Lifecycle Methods =====
 
     /**
      * Create a new meeting (as host)
      */
     public void createMeeting(String meetingId, String userId, String userName, int port) throws IOException {
-        this.currentMeetingId = meetingId;
-        this.currentUserId = userId;
-        this.currentUserName = userName;
-        this.isHost = true;
-
-        // Start server if not already running, with retry logic for port conflicts
-        if (server == null || !server.isRunning()) {
-            int attempts = 0;
-            int maxAttempts = 10;
-            int tryPort = port;
-
-            while (attempts < maxAttempts) {
-                try {
-                    startServer(tryPort);
-                    break; // Success
-                } catch (java.net.BindException e) {
-                    attempts++;
-                    tryPort = port + attempts; // Try next port
-                    System.out.println("⚠️ Port " + (tryPort - 1) + " in use, trying " + tryPort);
-
-                    if (attempts >= maxAttempts) {
-                        throw new IOException("Could not find available port after " + maxAttempts + " attempts", e);
-                    }
-                }
-            }
-        }
-
-        // Register meeting in registry
-        String myIp = getLocalIp();
-        MeetingRegistry.registerMeeting(meetingId, myIp, serverPort);
-        System.out.println("📝 Meeting registered in database: " + meetingId + " at " + myIp + ":" + serverPort);
-
-        // Multicast announce so other machines can find host without request/reply
-        try {
-            mcast.startAnnounce(meetingId, myIp, serverPort);
-        } catch (Exception e) {
-            System.err.println("❌ Failed to start multicast announce: " + e.getMessage());
-            System.err.println("⚠️ Warning: LAN multicast discovery may not work on this network");
-        }
-
-        // Also start LAN discovery responder so other machines can find host
-        try {
-            lanDiscovery.startHostResponder(meetingId, serverPort);
-            System.out.println("✅ LAN discovery responder started for meeting: " + meetingId);
-        } catch (Exception e) {
-            System.err.println("❌ Failed to start LAN discovery responder: " + e.getMessage());
-            e.printStackTrace();
-            System.err.println(
-                    "⚠️ Warning: Participants on other machines may not be able to discover this meeting via LAN");
-        }
-
-        System.out.println("🎯 HOST READY! Meeting: " + meetingId + " | IP: " + myIp + " | Port: " + serverPort);
-        System.out.println("📢 Participants can now join using meeting code: " + meetingId);
+        lifecycleManager.createMeeting(meetingId, userId, userName, port);
     }
 
     /**
      * Join an existing meeting (as participant)
      */
     public void joinMeeting(String meetingId, String userId, String userName, int myPort) throws IOException {
-        this.currentMeetingId = meetingId;
-        this.currentUserId = userId;
-        this.currentUserName = userName;
-        this.isHost = false;
-
-        // Start server for incoming connections, with retry logic for port conflicts
-        if (server == null || !server.isRunning()) {
-            int attempts = 0;
-            int maxAttempts = 10;
-            int tryPort = myPort;
-
-            while (attempts < maxAttempts) {
-                try {
-                    startServer(tryPort);
-                    break; // Success
-                } catch (java.net.BindException e) {
-                    attempts++;
-                    tryPort = myPort + attempts; // Try next port
-                    System.out.println("⚠️ Port " + (tryPort - 1) + " in use, trying " + tryPort);
-
-                    if (attempts >= maxAttempts) {
-                        throw new IOException("Could not find available port after " + maxAttempts + " attempts", e);
-                    }
-                }
-            }
-        }
-
-        // Step 1: Try multicast discovery FIRST (host announces periodically)
-        // Step 2: Fallback to broadcast request/reply discovery
-        // Step 3: Fallback to local database (only works on same machine)
-        System.out.println("🔍 Step 1: Trying multicast discovery for meeting: " + meetingId);
-
-        MeetingRegistry.HostInfo host = null;
-        try {
-            LanMeetingMulticast.HostInfo hi = mcast.discoverHost(meetingId, 5000);
-            if (hi != null) {
-                host = new MeetingRegistry.HostInfo(hi.ip, hi.port);
-                System.out.println("📡 Found meeting via multicast: " + host.ip + ":" + host.port);
-                try {
-                    MeetingRegistry.registerMeeting(meetingId, host.ip, host.port);
-                } catch (Exception ignored) {
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("❌ Multicast discovery error: " + e.getMessage());
-        }
-
-        if (host == null) {
-            System.out.println("🔍 Step 2: Multicast failed, trying LAN broadcast discovery for meeting: " + meetingId);
-            host = discoverHostViaLan(meetingId);
-        }
-
-        boolean hostFromRegistry = false;
-
-        if (host == null) {
-            System.out.println("🔍 Step 3: Discovery failed, checking local database...");
-            host = MeetingRegistry.getMeetingHost(meetingId);
-            hostFromRegistry = host != null;
-
-            if (host == null) {
-                throw new IOException("Meeting not found: " + meetingId);
-            } else {
-                System.out.println("📝 Found meeting in local database: " + host.ip + ":" + host.port);
-            }
-        } else {
-            System.out.println("📡 Found meeting via discovery: " + host.ip + ":" + host.port);
-            // Save to local database for future reference
-            try {
-                MeetingRegistry.registerMeeting(meetingId, host.ip, host.port);
-            } catch (Exception ignored) {
-            }
-        }
-
-        try {
-            System.out.println("🔗 Attempting to connect to host: " + host.ip + ":" + host.port);
-            connectToPeer(host.ip, host.port);
-            System.out.println("✅ Successfully connected to meeting host!");
-        } catch (IOException firstConnectError) {
-            System.err.println("❌ Connection failed: " + firstConnectError.getMessage());
-            String msg = firstConnectError.getMessage() != null ? firstConnectError.getMessage() : "";
-            boolean refused = (firstConnectError instanceof java.net.ConnectException)
-                    || msg.contains("Connection refused")
-                    || msg.contains("refused");
-
-            if (hostFromRegistry && refused) {
-                System.out.println("🔄 Retrying with LAN discovery...");
-                MeetingRegistry.HostInfo discovered = discoverHostViaLan(meetingId);
-                if (discovered != null) {
-                    host = discovered;
-                    try {
-                        MeetingRegistry.registerMeeting(meetingId, host.ip, host.port);
-                    } catch (Exception ignored) {
-                    }
-                    System.out.println(
-                            "📡 Found host via LAN discovery: " + host.ip + ":" + host.port);
-                    connectToPeer(host.ip, host.port);
-                    System.out.println("✅ Successfully connected via LAN discovery!");
-                } else {
-                    System.err.println("❌ LAN discovery also failed");
-                    throw firstConnectError;
-                }
-            } else {
-                throw firstConnectError;
-            }
-        }
-
-        System.out.println("✅ Joined meeting: " + meetingId);
+        lifecycleManager.joinMeeting(meetingId, userId, userName, myPort);
     }
 
-    private MeetingRegistry.HostInfo discoverHostViaLan(String meetingId) {
-        MeetingRegistry.HostInfo discovered = null;
-        int attempts = 3;
-        for (int i = 1; i <= attempts; i++) {
-            try {
-                discovered = lanDiscovery.discoverHost(meetingId);
-            } catch (IOException ignored) {
-            }
-            if (discovered != null)
-                break;
-            try {
-                Thread.sleep(500);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
-        return discovered;
+    /**
+     * Stop P2P manager and close all connections
+     * This is called when leaving a meeting (NOT the same as ending a meeting)
+     */
+    public void stop() {
+        System.out.println("🛑 Stopping P2PManager...");
+
+        // Leave meeting (stops announcements, unregisters, etc.)
+        lifecycleManager.leaveMeeting();
+
+        // Shutdown connection manager (closes all connections)
+        connectionManager.shutdown();
+
+        // Clear peer state
+        peerStateManager.clearPeers();
+
+        System.out.println("✅ P2PManager stopped");
     }
 
-    public int getListeningPort() {
-        return serverPort;
+    /**
+     * End the meeting (host only)
+     * This broadcasts MEETING_ENDED to all participants and marks the meeting as
+     * closed
+     */
+    public void endMeeting() {
+        lifecycleManager.endMeeting();
+
+        // Also stop everything
+        connectionManager.shutdown();
+        peerStateManager.clearPeers();
     }
+
+    // ===== Connection Methods =====
 
     /**
      * Connect to a specific peer
      */
     public void connectToPeer(String ip, int port) throws IOException {
-        Socket socket = new Socket(ip, port);
-        PeerConnection conn = new PeerConnection(socket, this);
-        new Thread(conn, "PeerConnection-" + ip + ":" + port).start();
+        connectionManager.connectToPeer(ip, port);
     }
+
+    public int getListeningPort() {
+        return lifecycleManager.getServerPort();
+    }
+
+    // ===== Messaging Methods =====
 
     /**
      * Broadcast message to all connected peers
      */
     public void broadcast(P2PMessage message) {
-        message.setFrom(currentUserId);
-        message.setMeetingId(currentMeetingId);
+        message.setFrom(getCurrentUserId());
+        message.setMeetingId(getCurrentMeetingId());
         message.setTimestamp(System.currentTimeMillis());
 
-        System.out.println("📤 Broadcasting message: " + message.getType() + " to " + connections.size() + " peers");
+        var allConnections = connectionManager.getConnections();
+        System.out.println("📤 Broadcasting message: " + message.getType() + " to " + allConnections.size() + " peers");
 
-        for (PeerConnection conn : connections.values()) {
+        for (PeerConnection conn : allConnections.values()) {
             if (conn.isConnected()) {
                 conn.sendMessage(message);
             }
@@ -275,80 +115,15 @@ public class P2PManager {
      * Send message to specific peer
      */
     public void sendToPeer(String peerId, P2PMessage message) {
-        PeerConnection conn = connections.get(peerId);
+        PeerConnection conn = connectionManager.getConnection(peerId);
         if (conn != null && conn.isConnected()) {
-            message.setFrom(currentUserId);
-            message.setMeetingId(currentMeetingId);
+            message.setFrom(getCurrentUserId());
+            message.setMeetingId(getCurrentMeetingId());
+            message.setTimestamp(System.currentTimeMillis());
             conn.sendMessage(message);
         } else {
-            System.err.println("❌ Peer not connected: " + peerId);
+            System.err.println("❌ Cannot send to peer " + peerId + ": not connected");
         }
-    }
-
-    /**
-     * Called when a new peer connects
-     */
-    public void onPeerConnected(String peerId, String peerName, PeerConnection connection) {
-        connections.put(peerId, connection);
-
-        PeerInfo peerInfo = new PeerInfo();
-        peerInfo.setUserId(peerId);
-        peerInfo.setUserName(peerName);
-        peerInfo.setIpAddress(connection != null ? connection.getRemoteIpAddress() : null);
-        peerInfo.setPort(connection != null ? connection.getPeerListenPort() : 0);
-        peers.put(peerId, peerInfo);
-
-        System.out.println("✅ Peer connected: " + peerName + " (" + peerId + ")");
-
-        // Notify listeners
-        for (Consumer<PeerInfo> listener : peerJoinedListeners) {
-            listener.accept(peerInfo);
-        }
-
-        // Broadcast USER_JOINED to OTHER peers (not the new peer itself)
-        P2PMessage joinMessage = new P2PMessage(MessageType.USER_JOINED, currentUserId, "all");
-        joinMessage.addPayload("userId", peerId);
-        joinMessage.addPayload("userName", peerName);
-        joinMessage.setMeetingId(currentMeetingId);
-        joinMessage.setTimestamp(System.currentTimeMillis());
-
-        // Send to all peers EXCEPT the one that just joined
-        for (Map.Entry<String, PeerConnection> entry : connections.entrySet()) {
-            if (!entry.getKey().equals(peerId) && entry.getValue().isConnected()) {
-                entry.getValue().sendMessage(joinMessage);
-            }
-        }
-
-        System.out.println("📤 Sent USER_JOINED to " + (connections.size() - 1) + " existing peers");
-
-        // Host pushes updated peer list to all peers so mesh can self-heal quickly
-        if (isHost) {
-            for (PeerConnection conn : connections.values()) {
-                if (conn != null && conn.isConnected()) {
-                    sendPeerList(conn);
-                }
-            }
-        }
-    }
-
-    /**
-     * Called when a peer disconnects
-     */
-    public void onPeerDisconnected(String peerId) {
-        connections.remove(peerId);
-        peers.remove(peerId);
-
-        System.out.println("❌ Peer disconnected: " + peerId);
-
-        // Notify listeners
-        for (Consumer<String> listener : peerLeftListeners) {
-            listener.accept(peerId);
-        }
-
-        // Broadcast USER_LEFT to other peers
-        P2PMessage leftMessage = new P2PMessage(MessageType.USER_LEFT, currentUserId, "all");
-        leftMessage.addPayload("userId", peerId);
-        broadcast(leftMessage);
     }
 
     /**
@@ -361,13 +136,20 @@ public class P2PManager {
         switch (message.getType()) {
             case REQUEST_PEER_LIST:
                 // Only host should answer to avoid clients receiving multiple peer lists
-                if (isHost) {
-                    sendPeerList(fromConnection);
+                if (lifecycleManager.isHost()) {
+                    String myIp = getLocalIp();
+                    peerListManager.sendPeerList(fromConnection, getCurrentUserId(),
+                            getCurrentUserName(), myIp, getServerPort());
                 }
                 break;
 
             case PEER_LIST_RESPONSE:
-                handlePeerListResponse(message);
+                peerListManager.handlePeerListResponse(message, getCurrentUserId());
+
+                // Also forward to listeners so UI can refresh participant list/count
+                for (Consumer<P2PMessage> listener : messageListeners) {
+                    listener.accept(message);
+                }
                 break;
 
             default:
@@ -379,176 +161,128 @@ public class P2PManager {
         }
     }
 
-    private void sendPeerList(PeerConnection toConnection) {
-        P2PMessage response = new P2PMessage(MessageType.PEER_LIST_RESPONSE, currentUserId, toConnection.getPeerId());
+    // ===== Peer Connection Callbacks =====
 
-        // Serialize peer list as a simple string payload since P2PMessage JSON is flat
-        // Format: userId|userName|ip|port;userId|userName|ip|port
-        StringBuilder sb = new StringBuilder();
+    /**
+     * Called when a new peer connects
+     */
+    public void onPeerConnected(String peerId, String peerName, PeerConnection connection) {
+        System.out.println("🔔 DEBUG: onPeerConnected() called - peerId=" + peerId + ", peerName=" + peerName);
 
-        // include myself (host or participant) so clients can learn host port
-        String myIp = getLocalIp();
-        sb.append(currentUserId).append('|')
-                .append(currentUserName != null ? currentUserName : "").append('|')
-                .append(myIp != null ? myIp : "").append('|')
-                .append(serverPort);
+        // Add connection to connection manager
+        connectionManager.addConnection(peerId, connection);
+        System.out.println("🔗 DEBUG: Added connection to connectionManager for peer: " + peerId);
 
-        for (PeerInfo peer : peers.values()) {
-            if (peer == null || peer.getUserId() == null)
-                continue;
-            sb.append(';')
-                    .append(peer.getUserId()).append('|')
-                    .append(peer.getUserName() != null ? peer.getUserName() : "").append('|')
-                    .append(peer.getIpAddress() != null ? peer.getIpAddress() : "").append('|')
-                    .append(peer.getPort());
-        }
+        // Create and add peer info to state manager
+        PeerInfo peerInfo = new PeerInfo();
+        peerInfo.setUserId(peerId);
+        peerInfo.setUserName(peerName);
+        peerInfo.setIpAddress(connection != null ? connection.getRemoteIpAddress() : null);
+        peerInfo.setPort(connection != null ? connection.getPeerListenPort() : 0);
+        peerStateManager.addPeer(peerId, peerInfo);
+        System.out.println("👤 DEBUG: Added peer to peerStateManager: " + peerName + " (" + peerId + ")");
+        System.out.println("📊 DEBUG: Total peers in PeerStateManager: " + peerStateManager.getPeerCount());
 
-        response.addPayload("peers", sb.toString());
-        toConnection.sendMessage(response);
-    }
+        System.out.println("✅ Peer connected: " + peerName + " (" + peerId + ")");
 
-    private void handlePeerListResponse(P2PMessage message) {
-        String payload = message.getPayloadString("peers");
-        if (payload == null || payload.isBlank()) {
-            System.out.println("📋 Received empty peer list");
-            return;
-        }
+        // Broadcast USER_JOINED to OTHER peers (not the new peer itself)
+        P2PMessage joinMessage = new P2PMessage(MessageType.USER_JOINED, getCurrentUserId(), "all");
+        joinMessage.addPayload("userId", peerId);
+        joinMessage.addPayload("userName", peerName);
+        joinMessage.setMeetingId(getCurrentMeetingId());
+        joinMessage.setTimestamp(System.currentTimeMillis());
 
-        // Connect to peers we don't have a connection to yet (mesh)
-        String[] entries = payload.split(";");
-        int connectAttempts = 0;
-        for (String entry : entries) {
-            String[] parts = entry.split("\\|", -1);
-            if (parts.length < 4)
-                continue;
-
-            String peerId = parts[0];
-            String peerName = parts[1];
-            String ip = parts[2];
-            int port;
-            try {
-                port = Integer.parseInt(parts[3]);
-            } catch (Exception e) {
-                continue;
+        // Send to all peers EXCEPT the one that just joined
+        var allConnections = connectionManager.getConnections();
+        for (Map.Entry<String, PeerConnection> entry : allConnections.entrySet()) {
+            if (!entry.getKey().equals(peerId) && entry.getValue().isConnected()) {
+                entry.getValue().sendMessage(joinMessage);
             }
+        }
 
-            if (peerId == null || peerId.isBlank())
-                continue;
-            if (peerId.equals(currentUserId))
-                continue;
-            if (connections.containsKey(peerId))
-                continue;
-            if (ip == null || ip.isBlank() || port <= 0)
-                continue;
+        System.out.println("📤 Sent USER_JOINED to " + (allConnections.size() - 1) + " existing peers");
 
-            try {
-                connectToPeer(ip, port);
-                connectAttempts++;
-
-                PeerInfo pi = peers.get(peerId);
-                if (pi == null) {
-                    pi = new PeerInfo();
-                    pi.setUserId(peerId);
-                    pi.setUserName(peerName);
-                    peers.put(peerId, pi);
+        // Host pushes updated peer list to all peers so mesh can self-heal quickly
+        if (lifecycleManager.isHost()) {
+            String myIp = getLocalIp();
+            for (PeerConnection conn : allConnections.values()) {
+                if (conn != null && conn.isConnected()) {
+                    peerListManager.sendPeerList(conn, getCurrentUserId(),
+                            getCurrentUserName(), myIp, getServerPort());
                 }
-                pi.setIpAddress(ip);
-                pi.setPort(port);
-            } catch (IOException e) {
-                System.err
-                        .println("❌ Failed to connect to peer from list: " + ip + ":" + port + " -> " + e.getMessage());
             }
         }
-
-        System.out.println("📋 Received peer list, connect attempts: " + connectAttempts);
     }
 
     /**
-     * Stop P2P manager and close all connections
+     * Called when a peer disconnects
      */
-    public void stop() {
-        System.out.println("🛑 Stopping P2PManager...");
+    public void onPeerDisconnected(String peerId) {
+        connectionManager.removeConnection(peerId);
+        peerStateManager.removePeer(peerId);
 
-        try {
-            mcast.stopAnnounce();
-        } catch (Exception ignored) {
-        }
+        System.out.println("❌ Peer disconnected: " + peerId);
 
-        try {
-            lanDiscovery.stopHostResponder();
-        } catch (Exception ignored) {
-        }
-
-        // Unregister meeting from registry if this was the host
-        if (isHost && currentMeetingId != null) {
-            MeetingRegistry.unregisterMeeting(currentMeetingId);
-        }
-
-        // Close all peer connections
-        for (PeerConnection conn : connections.values()) {
-            conn.close();
-        }
-        connections.clear();
-        peers.clear();
-
-        // Stop server
-        if (server != null) {
-            server.stop();
-        }
-
-        System.out.println("✅ P2PManager stopped");
+        // Broadcast USER_LEFT to other peers
+        P2PMessage leftMessage = new P2PMessage(MessageType.USER_LEFT, getCurrentUserId(), "all");
+        leftMessage.addPayload("userId", peerId);
+        broadcast(leftMessage);
     }
 
-    // Event listener registration
+    // ===== Event Listener Management =====
+
     public void addPeerJoinedListener(Consumer<PeerInfo> listener) {
-        peerJoinedListeners.add(listener);
+        peerStateManager.addPeerJoinedListener(listener);
     }
 
     public void addPeerLeftListener(Consumer<String> listener) {
-        peerLeftListeners.add(listener);
+        peerStateManager.addPeerLeftListener(listener);
     }
 
     public void addMessageListener(Consumer<P2PMessage> listener) {
         messageListeners.add(listener);
     }
 
-    // Getters
+    // ===== Getters =====
+
     public String getCurrentUserId() {
-        return currentUserId;
+        return lifecycleManager.getCurrentUserId();
     }
 
     public String getCurrentUserName() {
-        return currentUserName;
+        return lifecycleManager.getCurrentUserName();
     }
 
     public String getCurrentMeetingId() {
-        return currentMeetingId;
+        return lifecycleManager.getCurrentMeetingId();
     }
 
     public int getServerPort() {
-        return serverPort;
+        return lifecycleManager.getServerPort();
     }
 
     public Map<String, PeerInfo> getPeers() {
-        return new HashMap<>(peers);
+        return peerStateManager.getPeers();
     }
 
     public void setPeerVideoOn(String peerId, boolean videoOn) {
-        PeerInfo peer = peers.get(peerId);
+        PeerInfo peer = peerStateManager.getPeerInfo(peerId);
         if (peer != null) {
             peer.setVideoOn(videoOn);
+            peerStateManager.updatePeerInfo(peerId, peer);
         }
     }
 
     public void setPeerAudioOn(String peerId, boolean audioOn) {
-        PeerInfo peer = peers.get(peerId);
+        PeerInfo peer = peerStateManager.getPeerInfo(peerId);
         if (peer != null) {
             peer.setAudioOn(audioOn);
+            peerStateManager.updatePeerInfo(peerId, peer);
         }
     }
 
     public int getConnectionCount() {
-        return connections.size();
+        return connectionManager.getConnectionCount();
     }
 
     private String getLocalIp() {
